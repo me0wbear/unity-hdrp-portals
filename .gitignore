@@ -52,3 +52,12 @@ testresults.xml
 /docs/
 /Assets/portal/SETUP.md
 /Assets/portal/SETUP.md.meta
+/BuildBenchmark/
+/BuildShots/
+/BuildFacing/
+portal-benchmark.md
+
+# Сторонние платные ассеты: в репозиторий не кладутся
+/Assets/UHFPS/
+/Assets/ThirdParty/
+/Assets/portal/Examples/Benchmark/Temporary.unity*

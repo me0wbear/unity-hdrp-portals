@@ -142,6 +142,47 @@ Known state: the **Seam** check does not build right now, failing with
 `level0 is corrupted` during scene serialization. It fails identically on
 unmodified code, so it is an environment problem rather than a regression.
 
+## Performance
+
+Frame time in the sandbox scene, 1920x1080, RTX 5080, median of 180 frames
+after a 60 frame warm-up, vsync off. The player stands in the cold room and
+looks straight into the opening, so the portal covers a good part of the screen.
+
+| Configuration | Median | Cost over baseline |
+| --- | --- | --- |
+| Portals off | 0.93 ms | — |
+| 1 pair, recursion depth 0 | 2.57 ms | +1.64 ms |
+| 1 pair, recursion depth 1 | 3.39 ms | +2.46 ms |
+| 1 pair, recursion depth 2 | 4.71 ms | +3.78 ms |
+| 1 pair, recursion depth 4 | 6.44 ms | +5.51 ms |
+| depth 2, resolution divider 2 | 3.40 ms | +2.47 ms |
+| depth 2, resolution divider 4 | 3.76 ms | +2.83 ms |
+| depth 2, portal behind the camera | 1.01 ms | +0.08 ms |
+| depth 2, content depth off | 3.84 ms | +2.91 ms |
+
+What the numbers say:
+
+- **A recursion level costs about a millisecond of frame time here, and that
+  scales with your scene, not with this table.** Each level is a full camera
+  rendering everything visible through the opening. The sandbox is nearly
+  empty, which is why the baseline is under a millisecond; in a real scene a
+  level costs a fraction of what your normal frame costs.
+- **Depth is the knob that matters, resolution is not.** Halving the target
+  resolution at depth 2 saves 1.3 ms; quartering it saves nothing further,
+  because by then the per-camera overhead dominates and there is no fill rate
+  left to give back. Lower `Recursion Depth` before you touch
+  `Resolution Divider`.
+- **A portal you cannot see is nearly free.** Behind the camera it costs
+  0.08 ms, so leave `Cull When Offscreen` on.
+- **Content depth costs about 0.9 ms** at depth 2. That is the price of fog,
+  depth of field and ambient occlusion working off the real distance. Turn
+  `Write Content Depth` off if your scene uses none of them.
+
+Run it yourself against your own scene: the benchmark lives in
+`Assets/portal/Examples/Benchmark`. Point `BenchmarkBuilder` at your scene,
+build, run the player, and it writes `portal-benchmark.md` next to the
+executable.
+
 ## Limitations
 
 Read this section. It is the honest list.
