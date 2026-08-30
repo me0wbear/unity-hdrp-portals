@@ -147,7 +147,12 @@ public sealed class PortalSystem : MonoBehaviour
             renderer.Render(portal.playerCamera, allowed);
             spent += renderer.LevelCount;
 
-            float weight = VolumeBlendWeight(portal, portal.playerCamera);
+            // Тянуть грейдинг может только портал, который сейчас рисуется для
+            // этой камеры. Стоящий за спиной или вне поля зрения не показывает
+            // ничего, и его сторона назначения игрока не касается.
+            float weight = renderer.LevelCount > 0
+                ? VolumeBlendWeight(portal, portal.playerCamera)
+                : 0f;
             if (weight > blendWeight)
             {
                 blendWeight = weight;
@@ -178,7 +183,16 @@ public sealed class PortalSystem : MonoBehaviour
             return 0f;
         }
 
-        float distance = Mathf.Abs(PortalMath.SignedDistance(portal.transform, eye));
+        // Только с лицевой стороны. Портал, к которому наблюдатель стоит спиной,
+        // ничего ему не показывает и тянуть его цветокоррекцию не должен. Без
+        // этой проверки вышедший из портала попадает в зону переноса того же
+        // портала и получает грейдинг комнаты, из которой только что ушёл.
+        float distance = PortalMath.SignedDistance(portal.transform, eye);
+        if (distance <= 0f)
+        {
+            return 0f;
+        }
+
         return 1f - Mathf.Clamp01(distance / Mathf.Max(portal.volumeBlendDistance, 0.01f));
     }
 
