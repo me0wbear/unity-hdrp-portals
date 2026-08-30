@@ -45,6 +45,9 @@ public sealed class Portal : MonoBehaviour
         + "чтобы разные настройки в двух комнатах не менялись рывком после перехода.")]
     public bool blendVolumesThroughPortal = true;
 
+    [Tooltip("С какого расстояния до проёма начинать перенос состояния Volume.")]
+    [Min(0.01f)] public float volumeBlendDistance = 2.5f;
+
     [Header("Оформление")]
     [Tooltip("Чем заполняется проём на последнем уровне рекурсии.")]
     [ColorUsage(false, true)]

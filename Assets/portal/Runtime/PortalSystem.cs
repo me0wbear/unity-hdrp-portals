@@ -26,6 +26,10 @@ public sealed class PortalSystem : MonoBehaviour
 
     private static PortalSystem _instance;
 
+    // Якорь Volume, которым модуль переводит грейдинг на сторону назначения.
+    private static Transform _volumeAnchor;
+    private static HDAdditionalCameraData _volumeAnchorOwner;
+
     /// <summary>Порталы, включённые прямо сейчас. Порядок — порядок включения.</summary>
     public static IReadOnlyList<Portal> Active => Portals;
 
@@ -40,6 +44,8 @@ public sealed class PortalSystem : MonoBehaviour
         Portals.Clear();
         Renderers.Clear();
         _instance = null;
+        _volumeAnchor = null;
+        _volumeAnchorOwner = null;
     }
 
     public static void Register(Portal portal)
@@ -115,6 +121,9 @@ public sealed class PortalSystem : MonoBehaviour
     {
         int spent = 0;
 
+        Portal blendPortal = null;
+        float blendWeight = 0f;
+
         for (int i = 0; i < Portals.Count; i++)
         {
             Portal portal = Portals[i];
@@ -137,7 +146,108 @@ public sealed class PortalSystem : MonoBehaviour
 
             renderer.Render(portal.playerCamera, allowed);
             spent += renderer.LevelCount;
+
+            float weight = VolumeBlendWeight(portal, portal.playerCamera);
+            if (weight > blendWeight)
+            {
+                blendWeight = weight;
+                blendPortal = portal;
+            }
         }
+
+        ApplyVolumeBlend(blendPortal, blendWeight);
+    }
+
+    /// <summary>
+    /// Насколько состояние Volume уже должно принадлежать той стороне: ноль
+    /// далеко от проёма, единица вплотную к нему. Считается только для того, к
+    /// чьему проёму наблюдатель реально подошёл: до бесконечной плоскости портала
+    /// можно оказаться близко, стоя в тридцати метрах вбок.
+    /// </summary>
+    private static float VolumeBlendWeight(Portal portal, Camera viewer)
+    {
+        if (!portal.blendVolumesThroughPortal || portal.exitPortal == null)
+        {
+            return 0f;
+        }
+
+        Vector3 eye = viewer.transform.position;
+        if (!PortalMath.IsInsideOpening(
+                portal.transform, eye, portal.OpeningSize, portal.volumeBlendDistance))
+        {
+            return 0f;
+        }
+
+        float distance = Mathf.Abs(PortalMath.SignedDistance(portal.transform, eye));
+        return 1f - Mathf.Clamp01(distance / Mathf.Max(portal.volumeBlendDistance, 0.01f));
+    }
+
+    /// <summary>
+    /// Двигает якорь Volume главной камеры к позиции, в которой наблюдатель
+    /// окажется после перехода.
+    ///
+    /// Зачем. Виртуальная камера рендерит без пост-обработки, а цветокоррекция —
+    /// это пост-обработка. Поэтому вид в проёме получает грейдинг той стороны,
+    /// где стоит игрок. Пока комнаты настроены одинаково, это незаметно, но
+    /// стоит развести их по цвету — и переход становится прыжком: тёплая
+    /// картинка разом сменяется холодной. Сдвиг якоря заранее переводит грейдинг
+    /// на сторону назначения, и к моменту перехода менять уже нечего.
+    /// </summary>
+    private static void ApplyVolumeBlend(Portal portal, float weight)
+    {
+        if (portal == null || weight <= 0f)
+        {
+            ReleaseVolumeAnchor();
+            return;
+        }
+
+        Camera viewer = portal.playerCamera;
+        if (!viewer.TryGetComponent(out HDAdditionalCameraData data))
+        {
+            return;
+        }
+
+        // Чужой якорь не трогаем: его мог поставить сам проект.
+        if (data.volumeAnchorOverride != null && data.volumeAnchorOverride != _volumeAnchor)
+        {
+            return;
+        }
+
+        EnsureVolumeAnchor();
+
+        Vector3 eye = viewer.transform.position;
+        Vector3 destination = PortalMath
+            .EntranceToExit(portal.transform, portal.exitPortal.transform)
+            .MultiplyPoint(eye);
+
+        _volumeAnchor.position = Vector3.Lerp(eye, destination, weight);
+        data.volumeAnchorOverride = _volumeAnchor;
+        _volumeAnchorOwner = data;
+    }
+
+    private static void EnsureVolumeAnchor()
+    {
+        if (_volumeAnchor == null)
+        {
+            var anchorObject = new GameObject("PortalVolumeAnchor");
+            DontDestroyOnLoad(anchorObject);
+            _volumeAnchor = anchorObject.transform;
+        }
+    }
+
+    private static void ReleaseVolumeAnchor()
+    {
+        if (_volumeAnchorOwner == null)
+        {
+            return;
+        }
+
+        if (_volumeAnchorOwner.volumeAnchorOverride == _volumeAnchor)
+        {
+            _volumeAnchorOwner.volumeAnchorOverride = null;
+        }
+
+        _volumeAnchorOwner = null;
     }
 
     private void OnDestroy()

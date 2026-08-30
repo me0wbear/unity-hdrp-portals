@@ -21,6 +21,14 @@ public sealed class PortalRenderer
     /// </summary>
     private const int DepthOffset = 100;
 
+    /// <summary>
+    /// Ближняя плоскость виртуальной камеры. Меньше ближней плоскости
+    /// наблюдателя, чтобы косое отсечение оставалось применимым вплотную к
+    /// плоскости выхода. Ниже опускать смысла нет: начинает сыпаться точность
+    /// буфера глубины.
+    /// </summary>
+    private const float MinimumNearClip = 0.02f;
+
     private readonly Portal _portal;
 
     private Camera[] _cameras = System.Array.Empty<Camera>();
@@ -554,32 +562,47 @@ public sealed class PortalRenderer
     {
         CopyLens(viewer, camera);
 
+        Transform exit = _portal.exitPortal.transform;
+
+        // Косая плоскость двигает ближнюю плоскость камеры на себя, поэтому она
+        // обязана остаться дальше ближней плоскости: иначе матрица вырождается
+        // и в таргет попадает мусор.
+        //
+        // В последние сантиметры перед переходом виртуальная камера подходит к
+        // плоскости выхода вплотную, и штатной ближней плоскости уже не хватает.
+        // Просто отключить там отсечение нельзя: всё, что стоит за выходом,
+        // влетает в кадр разом, и за кадр до перехода игрок видит вспышку.
+        // Вместо этого ближняя плоскость виртуальной камеры уменьшается — она
+        // наша, и точность глубины на последних сантиметрах роли не играет.
+        // Расстояние от камеры до самой плоскости отсечения, с учётом сдвига.
+        float standoff = Mathf.Abs(PortalMath.SignedDistance(exit, camera.transform.position))
+            + _portal.clippingOffset;
+
+        // Косое отсечение применимо, только пока плоскость заведомо дальше
+        // ближней плоскости камеры. Проходя ровно через камеру, матрица уходит
+        // в бесконечность. Ближняя плоскость у виртуальной камеры своя и
+        // маленькая (см. CopyLens), поэтому порог срабатывает только в последние
+        // миллиметры перед переходом.
+        bool obliqueUsable = standoff > camera.nearClipPlane * 2f;
+
         // Обязательно: CalculateObliqueMatrix строит результат поверх текущей
         // матрицы проекции, а там лежит косая матрица прошлого кадра. Без сброса
         // наклон накапливался бы кадр за кадром, и вид схлопнулся бы в полосу.
         camera.ResetProjectionMatrix();
 
-        Transform exit = _portal.exitPortal.transform;
-
-        // Косая плоскость двигает ближнюю плоскость камеры на себя. Если она
-        // окажется ближе штатной ближней плоскости, матрица вырождается и в
-        // таргет попадает мусор: содержимое проёма схлопывается в небо. Так
-        // бывает в последние сантиметры перед переходом, когда виртуальная
-        // камера подходит к плоскости выхода вплотную. Отсекать там уже нечего —
-        // наблюдатель фактически в проёме, — поэтому проекция остаётся обычной.
-        float distanceToExit = Mathf.Abs(
-            PortalMath.SignedDistance(exit, camera.transform.position)) - _portal.clippingOffset;
-
-        Matrix4x4 projection;
-        if (distanceToExit > camera.nearClipPlane)
+        Matrix4x4 projection = camera.projectionMatrix;
+        if (obliqueUsable)
         {
             Vector4 plane = PortalMath.CameraSpacePlane(
                 camera, exit.position, exit.forward, _portal.clippingOffset);
-            projection = camera.CalculateObliqueMatrix(plane);
-        }
-        else
-        {
-            projection = camera.projectionMatrix;
+            Matrix4x4 oblique = camera.CalculateObliqueMatrix(plane);
+
+            // Последняя проверка перед отправкой на видеокарту: одно
+            // нечисловое значение в матрице роняет приложение целиком.
+            if (IsFinite(oblique))
+            {
+                projection = oblique;
+            }
         }
 
         // taaJitter уже поделён на размер экрана в компонентах z и w, что и
@@ -591,11 +614,44 @@ public sealed class PortalRenderer
         camera.projectionMatrix = projection;
     }
 
+    /// <summary>
+    /// Все ли элементы матрицы — числа. Косая матрица вырождается, когда
+    /// плоскость отсечения проходит через камеру, и отправка такой матрицы на
+    /// видеокарту роняет приложение без внятного сообщения.
+    /// </summary>
+    private static bool IsFinite(Matrix4x4 matrix)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            float value = matrix[i];
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Копирует объектив наблюдателя, кроме ближней плоскости.
+    ///
+    /// Ближняя плоскость у виртуальной камеры своя и заметно меньше. Косое
+    /// отсечение двигает её на плоскость выхода, а к ней камера подходит
+    /// вплотную в последние сантиметры перед переходом. С ближней плоскостью
+    /// наблюдателя отсечение пришлось бы там отключать, и всё, что стоит за
+    /// выходом, влетало бы в кадр разом — за кадр до перехода игрок видел бы
+    /// вспышку. Точность глубины на этих сантиметрах роли не играет.
+    ///
+    /// Значение выставляется один раз и дальше не меняется: правка ближней
+    /// плоскости каждый кадр вместе с подменой матрицы проекции роняет
+    /// приложение в драйвере.
+    /// </summary>
     private static void CopyLens(Camera viewer, Camera camera)
     {
         camera.fieldOfView = viewer.fieldOfView;
         camera.aspect = viewer.aspect;
-        camera.nearClipPlane = viewer.nearClipPlane;
         camera.farClipPlane = viewer.farClipPlane;
+        camera.nearClipPlane = Mathf.Min(viewer.nearClipPlane, MinimumNearClip);
     }
 }
