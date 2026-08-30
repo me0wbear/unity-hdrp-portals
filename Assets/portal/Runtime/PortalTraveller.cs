@@ -27,6 +27,11 @@ public sealed class PortalTraveller : MonoBehaviour
     [Tooltip("На каком расстоянии от плоскости портала начинать следить за ним.")]
     [Min(0.1f)] private float trackingRange = 3f;
 
+    [SerializeField]
+    [Tooltip("Показывать двойника по ту сторону, пока путешественник пересекает "
+        + "плоскость. Нужен всем, у кого есть видимая геометрия.")]
+    private bool drawClone = true;
+
     /// <summary>Поднимается после того, как перенос уже применён.</summary>
     public event Action<PortalTeleportContext> Teleported;
 
@@ -35,6 +40,7 @@ public sealed class PortalTraveller : MonoBehaviour
     private CharacterController _controller;
     private Rigidbody _body;
     private bool _componentsResolved;
+    private PortalClone _clone;
 
     /// <summary>
     /// Точка, по которой засчитывается пересечение. Именно взгляд, а не корень.
@@ -128,6 +134,8 @@ public sealed class PortalTraveller : MonoBehaviour
             _body.angularVelocity = transformMatrix.MultiplyVector(_body.angularVelocity);
         }
 
+        _clone?.Hide();
+
         // Расстояния считаны для старой позы и после переноса бессмысленны.
         // Особенно до портала выхода: он теперь прямо за спиной, и сохранённый
         // знак прочитался бы как ещё одно пересечение.
@@ -164,6 +172,8 @@ public sealed class PortalTraveller : MonoBehaviour
         Vector3 eye = ViewPoint.position;
         IReadOnlyList<Portal> portals = PortalSystem.Active;
 
+        Portal straddled = null;
+
         for (int i = 0; i < portals.Count; i++)
         {
             Portal portal = portals[i];
@@ -192,6 +202,54 @@ public sealed class PortalTraveller : MonoBehaviour
             }
 
             _distances[portal] = current;
+
+            if (straddled == null && inside && Clone != null && Clone.StraddlesPlane(portal))
+            {
+                straddled = portal;
+            }
         }
+
+        UpdateClone(straddled);
+    }
+
+    /// <summary>
+    /// Двойник создаётся при первом обращении и только если у путешественника
+    /// есть что показывать. У игрока без видимой геометрии его не будет вовсе.
+    /// </summary>
+    private PortalClone Clone
+    {
+        get
+        {
+            if (!drawClone)
+            {
+                return null;
+            }
+
+            _clone ??= new PortalClone(transform);
+            return _clone;
+        }
+    }
+
+    private void UpdateClone(Portal straddled)
+    {
+        if (_clone == null)
+        {
+            return;
+        }
+
+        if (straddled != null)
+        {
+            _clone.Show(straddled);
+        }
+        else
+        {
+            _clone.Hide();
+        }
+    }
+
+    private void OnDisable()
+    {
+        _clone?.Dispose();
+        _clone = null;
     }
 }
