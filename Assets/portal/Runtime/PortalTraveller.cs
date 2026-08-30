@@ -24,7 +24,8 @@ public sealed class PortalTraveller : MonoBehaviour
     private float openingMargin = 0.35f;
 
     [SerializeField]
-    [Tooltip("На каком расстоянии от плоскости портала начинать следить за ним.")]
+    [Tooltip("На каком расстоянии от плоскости портала проверять двойника. "
+        + "Пересечение отслеживается независимо от расстояния, чтобы не пропускать быстрые объекты.")]
     [Min(0.1f)] private float trackingRange = 3f;
 
     [SerializeField]
@@ -35,7 +36,16 @@ public sealed class PortalTraveller : MonoBehaviour
     /// <summary>Поднимается после того, как перенос уже применён.</summary>
     public event Action<PortalTeleportContext> Teleported;
 
-    private readonly Dictionary<Portal, float> _distances = new Dictionary<Portal, float>();
+    private struct TrackingSample
+    {
+        public float Distance;
+        public Vector3 Eye;
+        public uint ActivationVersion;
+    }
+
+    private readonly Dictionary<Portal, TrackingSample> _distances = new Dictionary<Portal, TrackingSample>();
+    private readonly HashSet<Portal> _activePortals = new HashSet<Portal>();
+    private readonly List<Portal> _stalePortals = new List<Portal>();
 
     private CharacterController _controller;
     private Rigidbody _body;
@@ -79,7 +89,14 @@ public sealed class PortalTraveller : MonoBehaviour
     /// <summary>Запомненное расстояние до портала, если за ним следят.</summary>
     public bool TryGetTrackedDistance(Portal portal, out float distance)
     {
-        return _distances.TryGetValue(portal, out distance);
+        if (_distances.TryGetValue(portal, out TrackingSample sample))
+        {
+            distance = sample.Distance;
+            return true;
+        }
+
+        distance = default;
+        return false;
     }
 
     /// <summary>Записывает расстояние до портала напрямую. Нужно тестам и отладке.</summary>
@@ -87,7 +104,12 @@ public sealed class PortalTraveller : MonoBehaviour
     {
         if (portal != null)
         {
-            _distances[portal] = distance;
+            _distances[portal] = new TrackingSample
+            {
+                Distance = distance,
+                Eye = ViewPoint.position,
+                ActivationVersion = portal.ActivationVersion
+            };
         }
     }
 
@@ -181,8 +203,11 @@ public sealed class PortalTraveller : MonoBehaviour
     {
         Vector3 eye = ViewPoint.position;
         IReadOnlyList<Portal> portals = PortalSystem.Active;
+        PruneTracking(portals);
 
         Portal straddled = null;
+        Portal crossed = null;
+        float firstCrossing = float.PositiveInfinity;
 
         for (int i = 0; i < portals.Count; i++)
         {
@@ -194,24 +219,35 @@ public sealed class PortalTraveller : MonoBehaviour
 
             float current = PortalMath.SignedDistance(portal.transform, eye);
 
+            // Оба конца отрезка могут быть за trackingRange, хотя сам отрезок
+            // пересёк проём. Проверка пересечения предшествует отсечению двойника.
+            if (_distances.TryGetValue(portal, out TrackingSample previous)
+                && ShouldCross(previous.Distance, current, true))
+            {
+                float fraction = previous.Distance / (previous.Distance - current);
+                Vector3 intersection = Vector3.Lerp(previous.Eye, eye, fraction);
+                if (fraction < firstCrossing && PortalMath.IsInsideOpening(
+                    portal.transform, intersection, portal.OpeningSize, openingMargin))
+                {
+                    crossed = portal;
+                    firstCrossing = fraction;
+                }
+            }
+
+            _distances[portal] = new TrackingSample
+            {
+                Distance = current,
+                Eye = eye,
+                ActivationVersion = portal.ActivationVersion
+            };
+
             if (Mathf.Abs(current) > trackingRange)
             {
-                _distances.Remove(portal);
                 continue;
             }
 
             bool inside = PortalMath.IsInsideOpening(
                 portal.transform, eye, portal.OpeningSize, openingMargin);
-
-            float previous = TryGetTrackedDistance(portal, out float tracked) ? tracked : float.NaN;
-
-            if (ShouldCross(previous, current, inside))
-            {
-                Teleport(portal);
-                return;
-            }
-
-            _distances[portal] = current;
 
             if (straddled == null && inside && Clone != null && Clone.StraddlesPlane(portal))
             {
@@ -219,7 +255,49 @@ public sealed class PortalTraveller : MonoBehaviour
             }
         }
 
+        // За один шаг можно пересечь несколько проёмов. Выбираем первый по
+        // направлению движения, а не первый в порядке регистрации порталов.
+        if (crossed != null)
+        {
+            Teleport(crossed);
+            return;
+        }
+
         UpdateClone(straddled);
+    }
+
+    /// <summary>
+    /// Выборки относятся только к непрерывно активным порталам. Отсутствующие
+    /// и уничтоженные порталы удаляются, чтобы не хранить их ссылки и старые
+    /// знаки расстояния после повторного включения или смены сцены.
+    /// </summary>
+    private void PruneTracking(IReadOnlyList<Portal> portals)
+    {
+        _activePortals.Clear();
+        for (int i = 0; i < portals.Count; i++)
+        {
+            Portal portal = portals[i];
+            if (portal != null && portal.exitPortal != null)
+            {
+                _activePortals.Add(portal);
+            }
+        }
+
+        _stalePortals.Clear();
+        foreach (KeyValuePair<Portal, TrackingSample> entry in _distances)
+        {
+            if (!_activePortals.Contains(entry.Key)
+                || entry.Value.ActivationVersion != entry.Key.ActivationVersion)
+            {
+                _stalePortals.Add(entry.Key);
+            }
+        }
+
+        for (int i = 0; i < _stalePortals.Count; i++)
+        {
+            _distances.Remove(_stalePortals[i]);
+        }
+        _stalePortals.Clear();
     }
 
     /// <summary>
@@ -259,6 +337,9 @@ public sealed class PortalTraveller : MonoBehaviour
 
     private void OnDisable()
     {
+        ResetPortalTracking();
+        _activePortals.Clear();
+        _stalePortals.Clear();
         _clone?.Dispose();
         _clone = null;
     }

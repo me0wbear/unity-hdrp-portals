@@ -66,6 +66,10 @@ public sealed class Portal : MonoBehaviour
     private bool _openingSizeKnown;
     private MeshRenderer _cachedScreen;
 
+    // Новое включение начинает новый интервал наблюдения, даже если портал
+    // выключили и включили между двумя обновлениями путешественника.
+    internal uint ActivationVersion { get; private set; }
+
     /// <summary>
     /// Размер проёма в метрах. Берётся из масштаба квада один раз и запоминается:
     /// <see cref="PortalAperture"/> переписывает трансформ квада каждый кадр, и
@@ -162,6 +166,7 @@ public sealed class Portal : MonoBehaviour
 
     private void OnEnable()
     {
+        unchecked { ActivationVersion++; }
         PortalSystem.Register(this);
     }
 
