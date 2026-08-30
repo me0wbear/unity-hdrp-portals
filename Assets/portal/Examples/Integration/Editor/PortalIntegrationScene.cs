@@ -199,6 +199,13 @@ public static class PortalIntegrationScene
         SetReference(bridge, "look", look);
         SetReference(bridge, "traveller", traveller);
 
+        // Мост камеры модуля: он сбрасывает историю кадров HDRP на переходе.
+        // Без него один-два кадра идут с векторами движения, посчитанными от
+        // позы до перехода, и картинка на переходе рвётся.
+        PortalCameraBridge cameraBridge = player.AddComponent<PortalCameraBridge>();
+        SetReference(cameraBridge, "traveller", traveller);
+        SetReference(cameraBridge, "gameplayCamera", camera);
+
         return camera;
     }
 

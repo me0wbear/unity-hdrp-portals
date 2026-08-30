@@ -61,7 +61,10 @@ If the material ends up unassigned after the copy, rebuild it from
    in the scene.
 4. Add a `PortalTraveller` component to your player root, and put the camera
    transform in its **View Point** field.
-5. Press Play and walk through.
+5. Add a `PortalCameraBridge` next to it and fill in **Traveller** and
+   **Gameplay Camera**. Skip this and the picture tears for a frame or two on
+   every crossing.
+6. Press Play and walk through.
 
 No player yet? Drag in `Assets/portal/PortalPlayer.prefab` instead of step 4 —
 character controller, traveller, camera bridge and camera, already wired. Its
@@ -183,6 +186,27 @@ Run it yourself against your own scene: the benchmark lives in
 `Assets/portal/Examples/Benchmark`. Point `BenchmarkBuilder` at your scene,
 build, run the player, and it writes `portal-benchmark.md` next to the
 executable.
+
+## If something looks wrong
+
+**The picture tears at the moment of crossing, like a bubble popping.** The
+player has no `PortalCameraBridge`, or it has one with empty fields. HDRP does
+not notice a teleport by itself, so without the reset a frame or two go out
+with motion vectors computed from the pose before the crossing. Measured in
+the integration scene, frame to frame difference at the crossing: 0.0207
+without the bridge against 0.0041 with it, on a background of 0.0018.
+
+**You walk through a rotated pair and come out facing the wrong way.** Your
+controller keeps the look angle in its own fields and rewrites the camera from
+them every frame, which undoes the rotation on the next frame. See
+`Assets/portal/Examples/PortalIntegration.unity` and the dozen lines in
+`ExampleLookPortalBridge` — that is the whole fix, and it is the same shape for
+any controller.
+
+**The opening is a flat coloured rectangle.** No camera reached the portal. Run
+**Tools → Portals → Wire Scene**, then **Validate Scene**. If the colour is the
+one in **Fallback Color**, the portal is drawing but ran out of recursion
+budget: raise it with a `PortalBudget` component.
 
 ## Limitations
 
