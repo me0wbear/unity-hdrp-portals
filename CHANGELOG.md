@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reconstruct portal content depth with the inverse GPU projection, matching
+  the device-depth convention of HDRP's AOV buffer.
+- Test the movement segment's intersection with the opening, rather than its
+  endpoint, when deciding whether to teleport a traveller.
+- Detect fast crossings even when either endpoint is outside the clone tracking
+  range.
+- Select the first opening along a movement segment when several portals are
+  crossed in one update, independently of registration order.
+- Discard crossing history when a portal is absent or re-enabled, and when a
+  traveller is disabled.
+
+### Added
+
+- Regression coverage for swept crossings and tracking lifecycle, plus GPU
+  depth reconstruction tests using the actual virtual-camera projection.
+
 ## [1.0.0] - 2026-08-31
 
 First public release.

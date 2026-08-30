@@ -1,0 +1,13 @@
+#pragma kernel Reconstruct
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+
+float4x4 _InverseProjection;
+float4 _DevicePosition;
+RWStructuredBuffer<float> _Distance;
+
+[numthreads(1, 1, 1)]
+void Reconstruct(uint3 id : SV_DispatchThreadID)
+{
+    _Distance[0] = ComputeViewSpacePosition(
+        _DevicePosition.xy, _DevicePosition.z, _InverseProjection).z;
+}

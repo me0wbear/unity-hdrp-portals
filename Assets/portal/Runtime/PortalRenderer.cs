@@ -137,7 +137,9 @@ public sealed class PortalRenderer
 
             if (level == 0)
             {
-                ContentInverseProjection = camera.projectionMatrix.inverse;
+                // AOV содержит аппаратную глубину: диапазон Z и направление Y
+                // должны совпадать с проекцией, использованной при рендере в RT.
+                ContentInverseProjection = GL.GetGPUProjectionMatrix(camera.projectionMatrix, true).inverse;
             }
         }
     }

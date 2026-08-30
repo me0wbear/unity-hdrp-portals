@@ -118,7 +118,7 @@ exactly what many controllers do during a teleport.
 
 ## What is verified
 
-The repository carries a test lab under `Assets/LabTools` — 34 unit tests plus
+The repository carries a test lab under `Assets/LabTools` — 49 EditMode tests plus
 scene checks that build a player, walk a scripted path and measure the frames.
 Numbers below are from an RTX 5080 at 1280x720.
 
@@ -131,6 +131,12 @@ Numbers below are from an RTX 5080 at 1280x720.
 | Ghost | Portal view against the same view rendered directly | within 0.0008 with TAA on |
 
 Run one with `tools/check.sh <name>`, for example `tools/check.sh Color`.
+
+Run the EditMode suite in Unity's Test Runner. Four depth reconstruction tests
+execute a compute shader and need a graphics device; batch runs with
+`-nographics` skip them. Use `-force-d3d12` without `-nographics` to include the
+GPU checks on Windows. Crossing tests include diagonal movement, fast segments
+and portal/traveller reactivation.
 
 Known state: the **Seam** check does not build right now, failing with
 `level0 is corrupted` during scene serialization. It fails identically on
