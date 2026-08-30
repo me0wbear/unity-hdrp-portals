@@ -99,6 +99,10 @@ try {
             Test-Log ("invalid {0}={1}" -f $field, (ConvertTo-Json -InputObject $value -Compress)) (ConvertTo-Record $result) 1
         }
     }
+    foreach ($field in @('status', 'check', 'commit', 'runId', 'failureReason')) {
+        $result = New-Result; $result[$field] += [char]0x00ad
+        Test-Log "Unicode soft hyphen in $field" (ConvertTo-Record $result) 1
+    }
     $result = New-Result; $result.projectPath = 'c:/PORTAL TESTS/project/'
     Test-Log 'Windows path case separators and trailing separator' (ConvertTo-Record $result) 0
     $result = New-Result; $result.crossingCount = 3

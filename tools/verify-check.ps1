@@ -89,15 +89,15 @@ try {
         if ($result.$field -isnot [string]) { throw "Field must be a string: $field" }
     }
     if ($result.completed -isnot [bool] -or -not $result.completed) { throw 'Check is not completed.' }
-    if ($result.status -cne 'Passed') { throw "Check status: $($result.status). Reason: $($result.failureReason)" }
-    if ($result.failureReason -cne '') { throw 'Passed result must have an empty failureReason.' }
+    if (-not [StringComparer]::Ordinal.Equals($result.status, 'Passed')) { throw "Check status: $($result.status). Reason: $($result.failureReason)" }
+    if ($result.failureReason.Length -ne 0) { throw 'Passed result must have an empty failureReason.' }
     foreach ($field in @('frameCount', 'crossingCount')) {
         if ($result.$field -isnot [int] -and $result.$field -isnot [long]) { throw "Field must be an integer: $field" }
     }
     if ($result.frameCount -le 0 -or $result.crossingCount -lt 0) { throw 'Invalid frame or crossing count.' }
-    if ($result.check -cne $ExpectedCheck) { throw 'Check name mismatch.' }
-    if ($result.commit -cne $ExpectedCommit) { throw 'Commit mismatch.' }
-    if ($result.runId -cne $ExpectedRunId) { throw 'Run ID mismatch.' }
+    if (-not [StringComparer]::Ordinal.Equals($result.check, $ExpectedCheck)) { throw 'Check name mismatch.' }
+    if (-not [StringComparer]::Ordinal.Equals($result.commit, $ExpectedCommit)) { throw 'Commit mismatch.' }
+    if (-not [StringComparer]::Ordinal.Equals($result.runId, $ExpectedRunId)) { throw 'Run ID mismatch.' }
     $actualProject = Get-CanonicalWindowsPath $result.projectPath
     $expectedProject = Get-CanonicalWindowsPath $ExpectedProjectPath
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualProject, $expectedProject)) { throw 'Project path mismatch.' }

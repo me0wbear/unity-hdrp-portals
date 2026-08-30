@@ -84,6 +84,17 @@ function Test-Runner([string]$Name, [scriptblock]$Body) {
 
 function Get-Calls { return @(Get-Content -LiteralPath $script:trace | ForEach-Object { ConvertFrom-Json $_ }) }
 
+function Assert-EditorProjectArguments($Calls, [string]$ExpectedProject) {
+    $editorCalls = @($Calls | Where-Object { $_.stage -in @('warmup', 'build') })
+    Assert-True ($editorCalls.Count -eq 2) 'Expected both editor stages.'
+    $expected = [IO.Path]::GetFullPath($ExpectedProject).TrimEnd('\')
+    foreach ($call in $editorCalls) {
+        Assert-True (-not [string]::IsNullOrEmpty($call.projectArg)) "Missing -projectPath at $($call.stage)."
+        $actual = [IO.Path]::GetFullPath($call.projectArg).TrimEnd('\')
+        Assert-True ([StringComparer]::OrdinalIgnoreCase.Equals($actual, $expected)) "Wrong -projectPath at $($call.stage)."
+    }
+}
+
 try {
     $script:checkoutA = New-Checkout 'checkout A'
     $checkoutB = New-Checkout 'checkout B'
@@ -147,6 +158,7 @@ public static class FakeUnity {
             Assert-True ($result.Exit -eq 0) $result.Output
             $calls = Get-Calls
             Assert-True (($calls.stage -join ',') -eq 'warmup,build,player') 'Stage order mismatch.'
+            Assert-EditorProjectArguments $calls $script:checkoutA
             $expectedCommit = (& git -C $script:checkoutA rev-parse HEAD).Trim()
             foreach ($call in $calls) {
                 Assert-True ($call.project.Replace('/', '\') -eq $script:checkoutA) 'Wrong project identity.'
@@ -167,7 +179,9 @@ public static class FakeUnity {
         $result = Invoke-Runner $testRoot 'Seam' '' $checkoutB
         Assert-True ($result.Exit -eq 0) $result.Output
         $expectedCommit = (& git -C $checkoutB rev-parse HEAD).Trim()
-        foreach ($call in (Get-Calls)) {
+        $calls = Get-Calls
+        Assert-EditorProjectArguments $calls $checkoutB
+        foreach ($call in $calls) {
             Assert-True ($call.project.Replace('/', '\') -eq $checkoutB) 'Override ignored.'
             Assert-True ($call.commit -ceq $expectedCommit) 'Wrong checkout commit.'
         }
