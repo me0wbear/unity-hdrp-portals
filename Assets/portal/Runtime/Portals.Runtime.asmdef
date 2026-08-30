@@ -3,8 +3,7 @@
     "rootNamespace": "",
     "references": [
         "Unity.RenderPipelines.HighDefinition.Runtime",
-        "Unity.RenderPipelines.Core.Runtime",
-        "Unity.Cinemachine"
+        "Unity.RenderPipelines.Core.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

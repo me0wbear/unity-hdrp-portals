@@ -1,0 +1,25 @@
+{
+    "name": "Portals.Cinemachine",
+    "rootNamespace": "",
+    "references": [
+        "Portals.Runtime",
+        "Unity.Cinemachine"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "PORTALS_CINEMACHINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.cinemachine",
+            "expression": "3.0.0",
+            "define": "PORTALS_CINEMACHINE"
+        }
+    ],
+    "noEngineReferences": false
+}

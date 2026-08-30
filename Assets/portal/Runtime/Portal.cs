@@ -66,6 +66,7 @@ public sealed class Portal : MonoBehaviour
     private MaterialPropertyBlock _block;
     private Vector2 _openingSize;
     private bool _openingSizeKnown;
+    private MeshRenderer _cachedScreen;
 
     /// <summary>
     /// Размер проёма в метрах. Берётся из масштаба квада один раз и запоминается:
@@ -76,7 +77,10 @@ public sealed class Portal : MonoBehaviour
     {
         get
         {
-            if (!_openingSizeKnown)
+            // Пересчёт при смене квада обязателен: поле screen публичное, и
+            // портал, собранный скриптом в рантайме, иначе жил бы с размером
+            // по умолчанию — молча, без единой ошибки в логе.
+            if (!_openingSizeKnown || !ReferenceEquals(_cachedScreen, screen))
             {
                 CacheOpeningSize();
             }
@@ -101,6 +105,7 @@ public sealed class Portal : MonoBehaviour
         Vector3 scale = screen.transform.localScale;
         _openingSize = new Vector2(Mathf.Abs(scale.x), Mathf.Abs(scale.y));
         _openingSizeKnown = true;
+        _cachedScreen = screen;
     }
 
     /// <summary>

@@ -104,6 +104,16 @@ public sealed class PortalTraveller : MonoBehaviour
             return;
         }
 
+        // Портал, указывающий сам на себя, переносом не является: матрица
+        // вырождается в зеркальное отражение, и объект дёргается на месте.
+        // Ошибка настройки, но молча портить картинку из-за неё нельзя.
+        if (ReferenceEquals(entrance.exitPortal, entrance))
+        {
+            Debug.LogWarning("[Portal] " + entrance.name
+                + ": exitPortal points at the portal itself, the crossing is ignored", entrance);
+            return;
+        }
+
         ResolveComponents();
 
         Portal exit = entrance.exitPortal;

@@ -218,12 +218,16 @@ public sealed class PortalSystem : MonoBehaviour
         Camera viewer = portal.playerCamera;
         if (!viewer.TryGetComponent(out HDAdditionalCameraData data))
         {
+            // Отпустить прежний якорь обязательно: иначе камера, на которой
+            // блендинг работал раньше, останется с ним навсегда.
+            ReleaseVolumeAnchor();
             return;
         }
 
         // Чужой якорь не трогаем: его мог поставить сам проект.
         if (data.volumeAnchorOverride != null && data.volumeAnchorOverride != _volumeAnchor)
         {
+            ReleaseVolumeAnchor();
             return;
         }
 
