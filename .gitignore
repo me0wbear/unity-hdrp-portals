@@ -38,3 +38,6 @@
 *.VC.db
 .vs/
 .idea/
+/PrefabCheck/
+/AutoWireCheck/
+/SetupCheck/
