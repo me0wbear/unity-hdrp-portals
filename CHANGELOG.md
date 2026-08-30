@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Regression coverage for swept crossings and tracking lifecycle, plus GPU
   depth reconstruction tests using the actual virtual-camera projection.
+- `PortalBudget` component, exposing the scene wide recursion level cap that
+  previously lived in a static field and could only be changed from code.
+- Benchmark in `Assets/portal/Examples/Benchmark` and a Performance section in
+  the README with measured frame times.
+- Integration scene at `Assets/portal/Examples/PortalIntegration.unity` with a
+  rotated pair, a controller that keeps its own look angle, and the bridge that
+  rotates it on a crossing.
+- Unit tests for the UHFPS bridge against stub types, bringing the suite to 55.
+- Troubleshooting section in the README covering the tear at the crossing, a
+  rotated pair coming out facing the wrong way, and a blank opening.
 
 ## [1.0.0] - 2026-08-31
 
@@ -31,7 +41,7 @@ First public release.
 
 ### Added
 
-- `Portal`, `PortalTraveller`, `PortalCameraBridge` and `PortalBudget` components.
+- `Portal`, `PortalTraveller` and `PortalCameraBridge` components.
 - Recursive rendering: a virtual camera per level, each into a screen-sized
   target, sampled by screen-space UV so the opening matches the frame pixel for
   pixel.
@@ -62,7 +72,7 @@ First public release.
 - Sandbox scene at `Assets/portal/Examples/PortalSandbox.unity`.
 - Editor tools under **Tools → Portals**: create a pair, wire the scene, validate
   the scene, rebuild module assets, rebuild prefabs, build the sandbox scene.
-- 40 unit tests in `Assets/portal/Tests` and scripted scene checks in
+- 34 unit tests in `Assets/portal/Tests` and scripted scene checks in
   `Assets/LabTools` that build a player and measure the frames.
 
 ### Known issues
