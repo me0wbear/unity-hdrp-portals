@@ -8,7 +8,15 @@ Walk-through portals for Unity 6 and HDRP. The view inside the opening lives und
 the same exposure, tonemapping and antialiasing as the rest of the frame, so the
 frame before you cross and the frame after are the same picture.
 
-![Looking through a portal into the next room](.github/images/portal-through.png)
+![Looking through a portal at an angle](.github/images/portal-angle.png)
+
+<img src=".github/images/portal-through.png" width="49%"/> <img src=".github/images/portal-close.png" width="49%"/>
+
+The warm room is forty metres away from the cold one. Step sideways and the view
+through the opening shifts with you the way it does through a window — which is
+why the shot above shows the far room's side wall while the two below, taken
+head on, show its back wall and pillars. All three are frames from the sandbox
+scene that ships with the repository.
 
 ## Requirements
 
