@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering.HighDefinition;
 
 /// <summary>
 /// Реестр активных порталов и точка, из которой они рендерятся раз в кадр.
@@ -75,6 +76,13 @@ public sealed class PortalSystem : MonoBehaviour
         _instance = host.AddComponent<PortalSystem>();
         DontDestroyOnLoad(host);
 
+        // Проход подмены глубины живёт на носителе системы: он глобальный,
+        // сам находит нужные порталы и ничего не требует от чужой сцены.
+        var passVolume = host.AddComponent<CustomPassVolume>();
+        passVolume.isGlobal = true;
+        passVolume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
+        passVolume.AddPassOfType<PortalCompositePass>();
+
         // Порядок вызова OnDestroy при выходе не определён, а камеры порталов
         // держат таргеты и подписку на события пайплайна. Освобождаем их по
         // явному сигналу выхода, пока пайплайн ещё жив.
@@ -92,6 +100,15 @@ public sealed class PortalSystem : MonoBehaviour
         {
             renderer.Release();
         }
+    }
+
+    /// <summary>Готовы ли у портала буферы глубины и движения содержимого.</summary>
+    public static bool HasContentBuffers(Portal portal)
+    {
+        return portal != null
+            && Renderers.TryGetValue(portal, out PortalRenderer renderer)
+            && renderer.ContentDepth != null
+            && renderer.ContentMotion != null;
     }
 
     private void LateUpdate()

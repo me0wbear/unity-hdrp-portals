@@ -56,6 +56,9 @@ public sealed class Portal : MonoBehaviour
     private static readonly int MainTextureId = Shader.PropertyToID("_MainTex");
     private static readonly int FallbackColorId = Shader.PropertyToID("_FallbackColor");
     private static readonly int HasTextureId = Shader.PropertyToID("_HasTexture");
+    private static readonly int ContentDepthId = Shader.PropertyToID("_ContentDepth");
+    private static readonly int ContentMotionId = Shader.PropertyToID("_ContentMotion");
+    private static readonly int InverseProjectionId = Shader.PropertyToID("_PortalInverseProjection");
 
     private MaterialPropertyBlock _block;
     private Vector2 _openingSize;
@@ -125,6 +128,29 @@ public sealed class Portal : MonoBehaviour
         _block.SetTexture(MainTextureId, texture != null ? texture : Texture2D.blackTexture);
         _block.SetFloat(HasTextureId, texture != null ? 1f : 0f);
         _block.SetColor(FallbackColorId, fallbackColor);
+
+        screen.SetPropertyBlock(_block);
+    }
+
+    /// <summary>
+    /// Кладёт на квад глубину и движение того, что видно сквозь портал. Идут в
+    /// тот же блок свойств, что и текстура вида: проход подмены глубины рисует
+    /// этот же рендерер и подхватывает блок сам, а передать ему параметры иначе
+    /// нельзя — DrawRenderer блока свойств не принимает.
+    /// </summary>
+    public void SetContentBuffers(Texture depth, Texture motion, Matrix4x4 inverseProjection)
+    {
+        if (screen == null)
+        {
+            return;
+        }
+
+        _block ??= new MaterialPropertyBlock();
+        screen.GetPropertyBlock(_block);
+
+        _block.SetTexture(ContentDepthId, depth != null ? depth : Texture2D.blackTexture);
+        _block.SetTexture(ContentMotionId, motion != null ? motion : Texture2D.blackTexture);
+        _block.SetMatrix(InverseProjectionId, inverseProjection);
 
         screen.SetPropertyBlock(_block);
     }

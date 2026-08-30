@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
 
@@ -29,6 +30,26 @@ public sealed class PortalRenderer
 
     /// <summary>Рендерит ли портал прямо сейчас. Приостановленный бюджет не занимает.</summary>
     private bool _active;
+
+    // Глубина и векторы движения снимаются только с нулевого уровня: именно он
+    // виден игроку напрямую, и только его пиксели попадают в буферы главной
+    // камеры. Уровни глубже видны уже внутри чужого таргета, и своя глубина им
+    // не нужна.
+    private RTHandle _contentDepth;
+    private RTHandle _contentMotion;
+
+    /// <summary>Глубина того, что видно сквозь проём, в кодировке устройства.</summary>
+    public RTHandle ContentDepth => _active ? _contentDepth : null;
+
+    /// <summary>Экранное движение того, что видно сквозь проём.</summary>
+    public RTHandle ContentMotion => _active ? _contentMotion : null;
+
+    /// <summary>
+    /// Обратная матрица проекции нулевого уровня. Нужна, чтобы развернуть глубину
+    /// обратно в расстояние: проекция косая, и обычная линеаризация по ближней и
+    /// дальней плоскости для неё неверна.
+    /// </summary>
+    public Matrix4x4 ContentInverseProjection { get; private set; } = Matrix4x4.identity;
 
     public PortalRenderer(Portal portal)
     {
@@ -68,6 +89,11 @@ public sealed class PortalRenderer
 
             _cameras[level].transform.SetPositionAndRotation(pose.GetColumn(3), pose.rotation);
             ApplyProjection(viewer, _cameras[level]);
+
+            if (level == 0)
+            {
+                ContentInverseProjection = _cameras[0].projectionMatrix.inverse;
+            }
         }
     }
 
@@ -129,6 +155,7 @@ public sealed class PortalRenderer
     public void Release()
     {
         Unsubscribe();
+        ReleaseContentBuffers();
 
         // Снять свои таргеты с квада парного портала. Уровни рекурсии кладут их
         // именно туда, и без этой уборки парный портал остался бы со ссылкой на
@@ -262,6 +289,7 @@ public sealed class PortalRenderer
         if (ReferenceEquals(camera, _portal.playerCamera))
         {
             _portal.SetViewTexture(_targets[0]);
+            _portal.SetContentBuffers(_contentDepth, _contentMotion, ContentInverseProjection);
             return;
         }
 
@@ -364,7 +392,86 @@ public sealed class PortalRenderer
             _cameras[level] = CreateCamera(viewer, level, _targets[level]);
         }
 
+        RequestContentBuffers(width, height);
         Subscribe();
+    }
+
+    /// <summary>
+    /// Просит у пайплайна глубину и векторы движения нулевого уровня. Это
+    /// единственный публичный способ получить промежуточные буферы кадра, а не
+    /// только итоговую картинку: пайплайн сам скопирует их в выданные здесь
+    /// текстуры в конце своего кадра.
+    /// </summary>
+    private void RequestContentBuffers(int width, int height)
+    {
+        if (_cameras.Length == 0 || !_portal.writeContentDepth)
+        {
+            return;
+        }
+
+        _contentDepth = RTHandles.Alloc(
+            width, height,
+            colorFormat: GraphicsFormat.R32_SFloat,
+            filterMode: FilterMode.Point,
+            wrapMode: TextureWrapMode.Clamp,
+            name: _portal.name + "_ContentDepth");
+
+        _contentMotion = RTHandles.Alloc(
+            width, height,
+            colorFormat: GraphicsFormat.R16G16_SFloat,
+            filterMode: FilterMode.Point,
+            wrapMode: TextureWrapMode.Clamp,
+            name: _portal.name + "_ContentMotion");
+
+        if (!_cameras[0].TryGetComponent(out HDAdditionalCameraData data))
+        {
+            return;
+        }
+
+        var builder = new AOVRequestBuilder();
+        builder.Add(
+            AOVRequest.NewDefault(),
+            AllocateContentBuffer,
+            null,
+            new[] { AOVBuffers.DepthStencil, AOVBuffers.MotionVectors },
+            (cmd, buffers, properties) => { });
+
+        data.SetAOVRequests(builder.Build());
+    }
+
+    private RTHandle AllocateContentBuffer(AOVBuffers bufferId)
+    {
+        switch (bufferId)
+        {
+            case AOVBuffers.DepthStencil:
+                return _contentDepth;
+            case AOVBuffers.MotionVectors:
+                return _contentMotion;
+            default:
+                return null;
+        }
+    }
+
+    private void ReleaseContentBuffers()
+    {
+        if (_cameras.Length > 0
+            && _cameras[0] != null
+            && _cameras[0].TryGetComponent(out HDAdditionalCameraData data))
+        {
+            data.SetAOVRequests(null);
+        }
+
+        if (_contentDepth != null)
+        {
+            RTHandles.Release(_contentDepth);
+            _contentDepth = null;
+        }
+
+        if (_contentMotion != null)
+        {
+            RTHandles.Release(_contentMotion);
+            _contentMotion = null;
+        }
     }
 
     private RenderTexture CreateTarget(int width, int height, int level)
