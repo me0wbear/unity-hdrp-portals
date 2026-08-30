@@ -58,20 +58,43 @@ public sealed class Portal : MonoBehaviour
     private static readonly int HasTextureId = Shader.PropertyToID("_HasTexture");
 
     private MaterialPropertyBlock _block;
+    private Vector2 _openingSize;
+    private bool _openingSizeKnown;
 
-    /// <summary>Размер проёма в метрах, взятый из масштаба квада.</summary>
+    /// <summary>
+    /// Размер проёма в метрах. Берётся из масштаба квада один раз и запоминается:
+    /// <see cref="PortalAperture"/> переписывает трансформ квада каждый кадр, и
+    /// читать размер оттуда постоянно означало бы гонку с самим собой.
+    /// </summary>
     public Vector2 OpeningSize
     {
         get
         {
-            if (screen == null)
+            if (!_openingSizeKnown)
             {
-                return Vector2.one;
+                CacheOpeningSize();
             }
 
-            Vector3 scale = screen.transform.localScale;
-            return new Vector2(Mathf.Abs(scale.x), Mathf.Abs(scale.y));
+            return _openingSize;
         }
+    }
+
+    /// <summary>
+    /// Перечитывает размер проёма из текущего масштаба квада. Нужно вызывать,
+    /// если размер меняется в рантайме или квад назначен после запуска.
+    /// </summary>
+    public void CacheOpeningSize()
+    {
+        if (screen == null)
+        {
+            _openingSize = Vector2.one;
+            _openingSizeKnown = false;
+            return;
+        }
+
+        Vector3 scale = screen.transform.localScale;
+        _openingSize = new Vector2(Mathf.Abs(scale.x), Mathf.Abs(scale.y));
+        _openingSizeKnown = true;
     }
 
     /// <summary>
