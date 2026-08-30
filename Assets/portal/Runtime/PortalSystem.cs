@@ -86,6 +86,13 @@ public sealed class PortalSystem : MonoBehaviour
         // сам находит нужные порталы и ничего не требует от чужой сцены.
         var passVolume = host.AddComponent<CustomPassVolume>();
         passVolume.isGlobal = true;
+        // Точка впрыска — после всей непрозрачной геометрии и до прозрачной.
+        // Раньше нельзя по двум причинам сразу. Во-первых, непрозрачные материалы
+        // HDRP сравнивают глубину на равенство с той, что осталась от препасса:
+        // подменённый буфер отсёк бы всю обычную геометрию кадра. Во-вторых,
+        // туман накладывается между препассом и прозрачными, а виртуальная
+        // камера свой туман уже нарисовала прямо в содержимом — вплотную к
+        // проёму, где квад закрывает весь экран, второй слой выбеливает кадр.
         passVolume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
         passVolume.AddPassOfType<PortalCompositePass>();
 
@@ -105,6 +112,21 @@ public sealed class PortalSystem : MonoBehaviour
         foreach (PortalRenderer renderer in Renderers.Values)
         {
             renderer.Release();
+        }
+    }
+
+    /// <summary>
+    /// Объявляет историю кадров всех порталов недействительной. Вызывать на
+    /// телепорте наблюдателя: виртуальные камеры порталов держат позу,
+    /// пересчитанную от его позы, поэтому вместе с ним прыгают и они. Без
+    /// сброса пайплайн примет этот прыжок за движение и один кадр проёмы будут
+    /// размазаны векторами движения, посчитанными от позы до перехода.
+    /// </summary>
+    public static void ResetHistory()
+    {
+        foreach (PortalRenderer renderer in Renderers.Values)
+        {
+            renderer.ResetHistory();
         }
     }
 

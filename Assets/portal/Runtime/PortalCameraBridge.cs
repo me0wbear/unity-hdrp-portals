@@ -83,6 +83,12 @@ public sealed class PortalCameraBridge : MonoBehaviour
         CameraWarped?.Invoke(context, gameplayCamera);
         _uhfps.Apply(context);
         ResetCameraHistory();
+
+        // Виртуальные камеры порталов прыгнули вместе с наблюдателем, и их
+        // историю кадров надо выбросить так же, как и его собственную. Это не
+        // зависит от resetCameraHistory: тот переключатель отдаёт наружу
+        // геймплейную камеру, а до внутренних камер модуля снаружи не добраться.
+        PortalSystem.ResetHistory();
     }
 
     /// <summary>

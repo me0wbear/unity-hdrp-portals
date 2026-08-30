@@ -36,6 +36,18 @@ public sealed class PortalRenderer
     private bool _subscribed;
     private bool _reported;
 
+    /// <summary>
+    /// Сколько уровней занято в этом кадре. Ёмкость массивов может быть больше:
+    /// лишние уровни выключены, но живы.
+    /// </summary>
+    private int _levels;
+
+    /// <summary>
+    /// Рисовался ли уровень в прошлом кадре. По этому и определяется, что его
+    /// поза сменилась скачком и историю кадров надо выбросить.
+    /// </summary>
+    private bool[] _rendered = System.Array.Empty<bool>();
+
     /// <summary>Рендерит ли портал прямо сейчас. Приостановленный бюджет не занимает.</summary>
     private bool _active;
 
@@ -67,7 +79,7 @@ public sealed class PortalRenderer
     }
 
     /// <summary>Сколько уровней рендерится прямо сейчас. Приостановленный портал даёт ноль.</summary>
-    public int LevelCount => _active ? _cameras.Length : 0;
+    public int LevelCount => _active ? _levels : 0;
 
     /// <summary>
     /// Готовит позы и таргеты уровней. Вызывается раз в кадр из
@@ -87,23 +99,67 @@ public sealed class PortalRenderer
             return;
         }
 
-        Resume();
         Subscribe();
         EnsureCapacity(levels, viewer);
+        _active = true;
 
         for (int level = 0; level < _cameras.Length; level++)
         {
+            Camera camera = _cameras[level];
+            if (camera == null)
+            {
+                continue;
+            }
+
+            // Уровни сверх занятых в этом кадре выключаются, но не разрушаются.
+            if (level >= _levels)
+            {
+                camera.enabled = false;
+                _rendered[level] = false;
+                continue;
+            }
+
             Matrix4x4 pose = PortalMath.EntranceToExit(
                     _portal.transform, _portal.exitPortal.transform, level + 1)
                 * viewer.transform.localToWorldMatrix;
 
-            _cameras[level].transform.SetPositionAndRotation(pose.GetColumn(3), pose.rotation);
-            ApplyProjection(viewer, _cameras[level]);
+            camera.transform.SetPositionAndRotation(pose.GetColumn(3), pose.rotation);
+            ApplyProjection(viewer, camera);
+
+            // Уровень, который в прошлом кадре не рисовался, приходит со
+            // сведениями о прошлом кадре от своей прежней позы, а она может быть
+            // где угодно: за спиной, в другой комнате, на другом конце уровня.
+            // Пайплайн принимает разницу поз за настоящее движение и выдаёт
+            // огромные векторы движения. Отсюда они попадают в буфер главной
+            // камеры и размазывают проём: размытие в движении честно мажет по
+            // тому, что ему дали. Сам HDRP историю сбрасывает только на первом
+            // кадре камеры и на смене режима сглаживания, скачок позы он не ловит.
+            // Сброс идёт после переустановки позы, иначе выброшенная история
+            // тут же собралась бы заново от старой.
+            if (!_rendered[level])
+            {
+                camera.enabled = true;
+                HDCamera.GetOrCreate(camera).Reset();
+                _rendered[level] = true;
+            }
 
             if (level == 0)
             {
-                ContentInverseProjection = _cameras[0].projectionMatrix.inverse;
+                ContentInverseProjection = camera.projectionMatrix.inverse;
             }
+        }
+    }
+
+    /// <summary>
+    /// Помечает историю кадров всех уровней недействительной: в следующем кадре
+    /// она соберётся заново от новых поз. Нужно на телепорте наблюдателя —
+    /// виртуальные камеры повторяют его позу, значит прыгают вместе с ним.
+    /// </summary>
+    public void ResetHistory()
+    {
+        for (int i = 0; i < _rendered.Length; i++)
+        {
+            _rendered[i] = false;
         }
     }
 
@@ -116,6 +172,7 @@ public sealed class PortalRenderer
     private void Suspend()
     {
         _active = false;
+        _levels = 0;
 
         if (_cameras.Length == 0)
         {
@@ -128,26 +185,17 @@ public sealed class PortalRenderer
             {
                 _cameras[i].enabled = false;
             }
+
+            // Пока портал был вне видимости, наблюдатель успел уйти. История
+            // кадров уровня относится к прежней позе, и после возвращения её
+            // надо собирать заново, а не продолжать.
+            _rendered[i] = false;
         }
 
         // Привязки текстур намеренно остаются как были. Таргеты при приостановке
         // живы, отвязывать их незачем, а обнуление дало бы чёрную вспышку в тот
         // кадр, когда портал вернётся в поле зрения. Снимает привязки только
         // Release, вместе с самими таргетами.
-    }
-
-    /// <summary>Включает камеры обратно после приостановки.</summary>
-    private void Resume()
-    {
-        _active = true;
-
-        for (int i = 0; i < _cameras.Length; i++)
-        {
-            if (_cameras[i] != null && !_cameras[i].enabled)
-            {
-                _cameras[i].enabled = true;
-            }
-        }
     }
 
     /// <summary>
@@ -196,6 +244,8 @@ public sealed class PortalRenderer
 
         _cameras = System.Array.Empty<Camera>();
         _targets = System.Array.Empty<RenderTexture>();
+        _rendered = System.Array.Empty<bool>();
+        _levels = 0;
         _active = false;
 
         if (_portal != null)
@@ -310,7 +360,7 @@ public sealed class PortalRenderer
         // Камера уровня k смотрит на парный портал. В её кадре парный портал
         // должен показывать то, что нарисовал уровень k+1. У самого глубокого
         // уровня источника нет, и проём заливается цветом заглушки.
-        Texture content = level + 1 < _targets.Length ? _targets[level + 1] : null;
+        Texture content = level + 1 < _levels ? _targets[level + 1] : null;
         _portal.exitPortal.SetViewTexture(content);
     }
 
@@ -377,8 +427,16 @@ public sealed class PortalRenderer
         int width = Mathf.Max(1, viewer.pixelWidth / _portal.resolutionDivider);
         int height = Mathf.Max(1, viewer.pixelHeight / _portal.resolutionDivider);
 
-        bool matches = _cameras.Length == levels
-            && _targets.Length == levels
+        // Ёмкости достаточно, если уровней в ней не меньше запрошенного. Именно
+        // не меньше, а не ровно столько: число уровней меняется каждый раз, когда
+        // бюджет системы перераспределяется между порталами, а хватает для этого
+        // одного мигания видимости соседнего проёма. Пересоздание камер на каждое
+        // такое изменение означало бы, что камеры рождаются заново чуть ли не
+        // каждый кадр, а у новорождённой камеры нет истории кадров и её векторы
+        // движения — мусор. Лишние уровни просто выключены, а памяти под них
+        // отведено ровно столько, сколько портал запросил глубиной рекурсии.
+        bool matches = _cameras.Length >= levels
+            && _targets.Length == _cameras.Length
             && _targets.Length > 0
             && _targets[0] != null
             && _targets[0].width == width
@@ -386,6 +444,7 @@ public sealed class PortalRenderer
 
         if (matches)
         {
+            _levels = levels;
             return;
         }
 
@@ -393,6 +452,8 @@ public sealed class PortalRenderer
 
         _cameras = new Camera[levels];
         _targets = new RenderTexture[levels];
+        _rendered = new bool[levels];
+        _levels = levels;
 
         for (int level = 0; level < levels; level++)
         {
@@ -631,11 +692,16 @@ public sealed class PortalRenderer
             }
         }
 
-        // taaJitter уже поделён на размер экрана в компонентах z и w, что и
-        // требуется для сдвига матрицы проекции.
+        // Множитель два обязателен. Пайплайн применяет джиттер, сдвигая обе
+        // границы пирамиды видимости на одну и ту же величину: для матрицы
+        // проекции это даёт сдвиг элемента m02 на удвоенное значение, потому
+        // что он равен сумме границ, делённой на их разность. Компоненты z и w
+        // taaJitter уже поделены на размер экрана, но не удвоены. С одинарным
+        // значением содержимое проёма дрожит вдвое слабее окружения, и
+        // временное сглаживание собирает его иначе, чем остальной кадр.
         Vector4 jitter = HDCamera.GetOrCreate(viewer).taaJitter;
-        projection.m02 += jitter.z;
-        projection.m12 += jitter.w;
+        projection.m02 += 2f * jitter.z;
+        projection.m12 += 2f * jitter.w;
 
         camera.projectionMatrix = projection;
     }
