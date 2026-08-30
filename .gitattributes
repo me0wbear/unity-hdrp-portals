@@ -1,0 +1,31 @@
+# Unity хранит сцены, префабы и .meta в текстовом YAML. Перевод строк в них
+# менять нельзя: редактор пишет LF на всех платформах, и подмена на CRLF даёт
+# диффы во весь файл на ровном месте.
+* text=auto eol=lf
+
+*.cs        text eol=lf diff=csharp
+*.shader    text eol=lf
+*.hlsl      text eol=lf
+*.cginc     text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.asmdef    text eol=lf
+*.gitignore text eol=lf
+
+*.unity           text eol=lf merge=binary
+*.prefab          text eol=lf merge=binary
+*.mat             text eol=lf merge=binary
+*.asset           text eol=lf merge=binary
+*.meta            text eol=lf merge=binary
+*.controller      text eol=lf merge=binary
+*.shadergraph     text eol=lf merge=binary
+*.shadersubgraph  text eol=lf merge=binary
+
+*.png  binary
+*.jpg  binary
+*.tga  binary
+*.exr  binary
+*.fbx  binary
+*.dll  binary
+*.so   binary
+*.zip  binary
