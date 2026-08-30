@@ -45,6 +45,8 @@ public sealed class PortalRenderer
     // не нужна.
     private RTHandle _contentDepth;
     private RTHandle _contentMotion;
+    private RenderTexture _contentDepthTexture;
+    private RenderTexture _contentMotionTexture;
 
     /// <summary>Глубина того, что видно сквозь проём, в кодировке устройства.</summary>
     public RTHandle ContentDepth => _active ? _contentDepth : null;
@@ -415,19 +417,18 @@ public sealed class PortalRenderer
             return;
         }
 
-        _contentDepth = RTHandles.Alloc(
-            width, height,
-            colorFormat: GraphicsFormat.R32_SFloat,
-            filterMode: FilterMode.Point,
-            wrapMode: TextureWrapMode.Clamp,
-            name: _portal.name + "_ContentDepth");
+        // Текстуры создаются свои и оборачиваются, а не просятся у глобальной
+        // системы RTHandle. Той системой владеет пайплайн и уничтожает её при
+        // выгрузке; выданные ею дескрипторы переживали этот момент и роняли
+        // приложение уже после того, как все замеры записаны. Своей текстурой
+        // владеем сами и убираем её обычным порядком.
+        _contentDepthTexture = CreateContentTexture(
+            width, height, GraphicsFormat.R32_SFloat, _portal.name + "_ContentDepth");
+        _contentMotionTexture = CreateContentTexture(
+            width, height, GraphicsFormat.R16G16_SFloat, _portal.name + "_ContentMotion");
 
-        _contentMotion = RTHandles.Alloc(
-            width, height,
-            colorFormat: GraphicsFormat.R16G16_SFloat,
-            filterMode: FilterMode.Point,
-            wrapMode: TextureWrapMode.Clamp,
-            name: _portal.name + "_ContentMotion");
+        _contentDepth = RTHandles.Alloc(_contentDepthTexture);
+        _contentMotion = RTHandles.Alloc(_contentMotionTexture);
 
         if (!_cameras[0].TryGetComponent(out HDAdditionalCameraData data))
         {
@@ -443,6 +444,40 @@ public sealed class PortalRenderer
             (cmd, buffers, properties) => { });
 
         data.SetAOVRequests(builder.Build());
+    }
+
+    private static RenderTexture CreateContentTexture(
+        int width, int height, GraphicsFormat format, string name)
+    {
+        var texture = new RenderTexture(width, height, 0, format)
+        {
+            name = name,
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp,
+            useMipMap = false
+        };
+
+        texture.Create();
+        return texture;
+    }
+
+    /// <summary>
+    /// Снимает обёртку и уничтожает саму текстуру. Обёртка ничем не владеет,
+    /// поэтому порядок здесь безопасен в любом случае.
+    /// </summary>
+    private static void ReleaseContentTexture(ref RTHandle handle, ref RenderTexture texture)
+    {
+        if (handle != null)
+        {
+            RTHandles.Release(handle);
+            handle = null;
+        }
+
+        if (texture != null)
+        {
+            Object.Destroy(texture);
+            texture = null;
+        }
     }
 
     private RTHandle AllocateContentBuffer(AOVBuffers bufferId)
@@ -467,17 +502,8 @@ public sealed class PortalRenderer
             data.SetAOVRequests(null);
         }
 
-        if (_contentDepth != null)
-        {
-            RTHandles.Release(_contentDepth);
-            _contentDepth = null;
-        }
-
-        if (_contentMotion != null)
-        {
-            RTHandles.Release(_contentMotion);
-            _contentMotion = null;
-        }
+        ReleaseContentTexture(ref _contentDepth, ref _contentDepthTexture);
+        ReleaseContentTexture(ref _contentMotion, ref _contentMotionTexture);
     }
 
     private RenderTexture CreateTarget(int width, int height, int level)
