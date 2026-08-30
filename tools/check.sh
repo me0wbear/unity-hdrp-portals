@@ -42,6 +42,14 @@ LOWER=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
 BUILD_LOG="$PROJECT/${LOWER}build.log"
 RUN_LOG="$PROJECT/${LOWER}run.log"
 
+# Отдельный проход компиляции перед сборкой. Без него сцена, записанная сразу
+# после перекомпиляции скриптов, иногда сериализуется против ещё не устоявшейся
+# базы ассетов: плеер потом сообщает "level0 is corrupted" и падает до первого
+# кадра. Проход стоит полминуты и убирает эту случайность полностью.
+echo "=== компиляция ==="
+"$UNITY" -batchmode -nographics -projectPath "$PROJECT" \
+  -quit -logFile "$PROJECT/warmup.log"
+
 echo "=== сборка $NAME ==="
 "$UNITY" -batchmode -nographics -projectPath "$PROJECT" \
   -executeMethod "$METHOD" -logFile "$BUILD_LOG" -quit
