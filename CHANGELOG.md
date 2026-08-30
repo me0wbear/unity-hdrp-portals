@@ -62,8 +62,8 @@ First public release.
 - Sandbox scene at `Assets/portal/Examples/PortalSandbox.unity`.
 - Editor tools under **Tools → Portals**: create a pair, wire the scene, validate
   the scene, rebuild module assets, rebuild prefabs, build the sandbox scene.
-- Test lab under `Assets/LabTools`: 34 unit tests and scripted scene checks that
-  build a player and measure the frames.
+- 40 unit tests in `Assets/portal/Tests` and scripted scene checks in
+  `Assets/LabTools` that build a player and measure the frames.
 
 ### Known issues
 

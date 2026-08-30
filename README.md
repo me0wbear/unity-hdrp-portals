@@ -118,9 +118,10 @@ exactly what many controllers do during a teleport.
 
 ## What is verified
 
-The repository carries a test lab under `Assets/LabTools` — 49 EditMode tests plus
-scene checks that build a player, walk a scripted path and measure the frames.
-Numbers below are from an RTX 5080 at 1280x720.
+Unit tests live in `Assets/portal/Tests` — 55 of them, covering the geometry,
+the crossing rules, the depth reconstruction, the clone and the UHFPS bridge.
+Scene checks live in `Assets/LabTools`: each builds a player, walks a scripted
+path and measures the frames. Numbers below are from an RTX 5080 at 1280x720.
 
 | Check | Measures | Result |
 | --- | --- | --- |
@@ -207,9 +208,10 @@ Read this section. It is the honest list.
   on geometry around the exit.
 - **Stereo rendering is not supported.**
 - **Sound does not pass through a portal.**
-- The UHFPS bridge is written against reflection and tested against stubs that
-  copy the real class names and signatures. It has not been confirmed on the
-  actual asset.
+- The UHFPS bridge works through reflection and is covered by unit tests against
+  stubs that copy the real class names, namespace and field signatures. It has
+  not been confirmed against the actual asset, which is paid and not bundled
+  here.
 
 ## License
 
