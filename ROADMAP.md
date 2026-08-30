@@ -9,8 +9,8 @@ Two things are worth knowing before reading the gaps.
 
 The reference asset's own documentation lists, under known issues, that
 "URP/HDRP camera effects may cause a little sudden change during teleportation".
-That is the same colour grading shift described in [Track 1](#track-1--finish-what-is-already-broken)
-below. It is not a solved problem there either.
+That is one of the two causes of the contrast change described in Track 1
+below, and it is not a solved problem there either.
 
 Recursion and portals facing each other arrived in their 2.0; the 1.3
 documentation says outright not to place one portal facing another. Both work
@@ -26,8 +26,9 @@ here today, the second one measured.
 | Rigidbodies and props through | Yes, velocity and angular velocity rotated | Yes |
 | Clones with plane slicing | Yes | Yes |
 | Rotated and skewed pairs | Yes | Yes |
-| Real depth in the opening for fog, DoF, SSAO | Yes | Not documented |
+| Real depth in the opening | Partial: fog yes, depth of field beyond 0.8 m, occlusion no | Not documented |
 | Volume state carried across the crossing | Partial, within a blend distance | Listed as a known issue |
+| Screen space occlusion inside the opening | No, wrong under the oblique projection | Not documented |
 | Measured regression suite | 55 unit tests plus scene checks | None published |
 | Pipelines | HDRP only | Built-in, URP, HDRP |
 | Ready-made environment art | No | Yes, 850 MB of it |
@@ -39,53 +40,141 @@ for a game being built on this module is Track 1.
 
 Nothing here is a new feature. All of it is visible today.
 
-### 1.1 Colour grading through the opening
+### 1.1 Screen space effects under the oblique projection
 
-**Symptom.** Standing in room A and looking through a portal at room B, the
-geometry is B's but the grading is A's. Step through and the colour changes.
+**This is the confirmed cause of the contrast change at a crossing**, isolated
+by measurement in the sandbox and reproduced both ways.
 
-**Cause.** The virtual camera renders without post-processing, which is what
-makes the crossing seamless: the opening lives under the main camera's exposure
-and tonemap along with everything else. But colour grading is a Volume effect
-and Volumes are sampled at the main camera's position. Lighting and fog come
-out right, because the virtual camera renders those itself. Exposure and
-grading do not.
+**Symptom.** The same view looks different through the opening and after
+stepping through. Reads as a contrast change, concentrated where surfaces meet.
+
+**Cause.** The virtual camera uses an oblique near plane so nothing behind the
+exit is drawn. HDRP's ambient occlusion linearises depth with
+`LinearEyeDepth(depth, _ZBufferParams)`, and the pipeline's own header says
+what that costs:
+
+```
+// Z buffer to linear view space (eye) depth.
+// Does NOT correctly handle oblique view frustums.
+```
+
+So the occlusion pass reads wrong world positions on every portal camera. With
+the actual runtime matrices, a point 10 m from the camera reconstructs as
+**2.878 m** under the portal projection against 10.000 m on the main camera.
+The spatial denoise for the occlusion uses the same formula, so the error is
+filtered, not corrected.
+
+**Measured**, region 320x200 at the same pose, 8 bit channel levels:
+
+| Mode | MAE R/G/B | Worst in region |
+| --- | --- | --- |
+| Oblique projection with occlusion, as shipped | 0.80 / 0.97 / 1.28 | 20 |
+| Occlusion off in both cameras | 0.04 / 0.01 / 0.02 | 2 |
+| Occlusion on, ordinary projection | 0.05 / 0.02 / 0.03 | 2 |
+
+Both controls land in the same place, which rules out each cause on its own.
+
+**Scope is wider than the sandbox.** Ambient occlusion is not enabled by the
+sandbox volume; it arrives from the HDRP defaults. Any HDRP project with stock
+settings meets this. And every effect that linearises depth the same way is
+affected on those cameras, not only occlusion: screen space reflections,
+screen space global illumination, contact shadows and volumetrics all read
+depth through the same formula. Occlusion is simply the one that was measured.
+
+**The fix space is binary.** There is no configuration in which HDRP's
+occlusion is correct on an oblique camera, because obliqueness makes device
+depth depend on screen x and y, and no `_ZBufferParams` can undo that. So
+either the virtual camera stops being oblique, and the clipping it provides
+comes from somewhere else, or those effects stop running on the virtual camera
+and the opening gets them from elsewhere.
+
+**Direction, in the order worth trying.**
+
+1. *Mitigate now.* Turn the depth dependent screen space effects off on the
+   virtual cameras through frame settings, the way exposure and post processing
+   already are. Measured effect: worst case 20 levels down to 2. Cost: the
+   opening loses its own ambient occlusion. Put it behind a field so it can be
+   turned back on.
+
+2. *Fix properly.* Get the content depth into the main camera's depth buffer
+   **before** the pipeline's screen space effects run, and let the main camera
+   shade the opening. That depth is in the main camera's own convention by
+   construction, so occlusion, depth of field and reflections all become
+   correct at once. `AfterOpaqueDepthAndNormal` is the injection point: the
+   pipeline regenerates the depth pyramid immediately after it and tracks
+   whether a custom pass modified depth.
+
+   This was attempted during the depth work and reverted: at very close range
+   the frame went white, and fog risks being applied twice because the virtual
+   camera has already baked its own. Both need diagnosis rather than assumption
+   before this is called feasible.
+
+   If it works it closes 1.1 and 1.2 together and probably reflections too.
+
+3. *Fallback if 2 proves impossible.* Compute occlusion ourselves in a custom
+   pass on the portal target, reconstructing position with the inverse oblique
+   projection. `PortalContentDepth.shader` already does exactly that maths.
+   Expensive, and matching the look of the pipeline's own occlusion is its own
+   problem. Only if 2 fails.
+
+**Verify.** The comparison above needs to become a lab check rather than a
+temporary player, otherwise the fix gets graded by opinion. Add the two control
+modes as switches, as the investigation did.
+
+**Also worth measuring, not yet done.** Obliqueness grows as the view to the
+portal gets more grazing, so the error should grow with the angle. If it does
+not, the mechanism is not fully understood. Angled portals, recursion levels
+below the first, and a moving scene were all outside the investigation.
+
+**Size.** Step 1 is small. Step 2 is the largest single item in Track 1.
+
+### 1.2 Volume grading across the crossing
+
+A **separate** cause with the same symptom, and the one previously assumed to
+be the whole story. It is not: the sandbox has a single global volume shared by
+both rooms, so no grading difference can exist there, yet the shift is still
+visible. Both causes are real, in different scenes.
+
+**Symptom.** Rooms with different volume profiles: the opening shows the far
+room's geometry under the near room's grading.
+
+**Cause.** The virtual camera renders without post processing, which is what
+keeps the crossing seamless. Colour grading is a volume effect sampled at the
+main camera's position. Lighting and fog come out right because the virtual
+camera renders those itself; exposure and grading do not.
 
 **Current mitigation.** `Blend Volumes Through Portal` moves a volume anchor
-toward the exit as you approach, over `Volume Blend Distance`, default 2.5 m.
-Measured: 0.2786 mismatch at 3 m, 0.0003 at the crossing. It hides the seam
-only inside that distance.
+toward the exit over `Volume Blend Distance`, default 2.5 m. ColorCheck
+measures 0.2786 at 3 m against 0.0003 at the crossing, so it works only inside
+that distance.
 
-**Direction.** Grade the virtual camera's target with the destination Volume
-before compositing, rather than moving the viewer's anchor. That means running
-a colour grading pass on the portal target with the Volume stack evaluated at
-the virtual camera's position, and leaving exposure to the main camera as it is
-now, so the crossing stays seamless.
+**Direction.** Grade the virtual camera's target with the destination volume
+before compositing, instead of moving the viewer's anchor, leaving exposure to
+the main camera so the crossing stays seamless.
 
-**Verify.** ColorCheck `far delta` must fall from 0.2786 toward the `cross
-delta` of 0.0003, with two rooms graded deliberately differently. That check
-already exists and already measures exactly this.
+**Verify.** ColorCheck `far delta` falling from 0.2786 toward the crossing
+delta.
 
-**Size.** Medium. Touches the composite, which is the riskiest part of the
-module. Do it first anyway: it is the defect a player sees.
+**Size.** Medium. Touches the composite.
 
-### 1.2 Depth of field below 0.8 m
+### 1.3 Depth of field below 0.8 m
 
 **Symptom.** Closer than about 0.8 m the opening blurs when it should not.
 
 **State.** The device depth reconstruction fix moved the boundary from 3 m to
 0.8 m. 0.8 m is where `PortalAperture` begins pushing the quad back along the
 portal normal, so the remainder is about the aperture rather than the
-projection.
+projection. Step 2 of 1.1 would close this as well, since depth of field reads
+the same depth.
 
 **Verify.** BubbleCheck with `PORTAL_FARDOF=1`. Content sits 8 m away and the
-blur range is 4–9 m, so every sample must be soft. Today: 0.00266 at 1.5 m,
+blur range is 4-9 m, so every sample must be soft. Today: 0.00266 at 1.5 m,
 correct; 0.00803 at 0.8 m and 0.00772 at the crossing, both wrongly sharp,
 against 0.00227 for the same view rendered directly.
 
-**Size.** Small to medium once someone sits with the aperture maths.
+**Size.** Small to medium on its own, free if 1.1 step 2 lands.
 
-### 1.3 Motion vectors in the opening
+### 1.4 Motion vectors in the opening
 
 **Symptom.** A faint trail behind the content when the camera moves fast.
 
@@ -97,7 +186,7 @@ opening.
 
 **Direction.** Compute the content's screen motion directly from the virtual
 camera's current and previous view projection matrices rather than trusting the
-AOV output. The same class of bug as 1.1 in the depth work: the buffer is not
+AOV output. The same class of bug as the depth reconstruction: the buffer is not
 in the convention it appears to be.
 
 **Verify.** GhostCheck, plus a frame to frame difference while strafing past an
@@ -105,7 +194,7 @@ opening.
 
 **Size.** Medium.
 
-### 1.4 Harness defects
+### 1.5 Harness defects
 
 - `tools/check.sh` hardcodes the project path, so run from a git worktree it
   builds and measures a different checkout while appearing to test the branch.
@@ -216,11 +305,14 @@ cover demonstrating the module; they do not sell it.
 
 ## Suggested order
 
-1. Track 1.4, the harness, because it is how everything else is verified.
-2. Track 1.1, colour grading, because it is the defect that shows.
-3. Track 3.1, raycasts, small and immediately useful.
-4. Track 2.1 and 2.2, cost, before the scene gets heavy.
-5. Track 1.2 and 1.3, the remaining rendering defects.
-6. Everything else on demand.
+1. Track 1.5, the harness, because it is how everything else is verified, and
+   because 1.1 needs its comparison turned into a check before it can be graded.
+2. Track 1.1 step 1, the frame settings mitigation. Small, measured, ships today.
+3. Track 1.1 step 2, content depth into the main camera before its screen space
+   effects run. The largest item here, and it closes 1.1 and 1.3 together.
+4. Track 3.1, raycasts, small and immediately useful.
+5. Track 2.1 and 2.2, cost, before the scene gets heavy.
+6. Track 1.2 and 1.4, grading and motion vectors.
+7. Everything else on demand.
 
 [fluid]: https://assetstore.unity.com/packages/3d/environments/fluid-seamless-portals-full-266857
