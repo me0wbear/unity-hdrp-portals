@@ -17,6 +17,9 @@ First public release.
 - Recursive rendering: a virtual camera per level, each into a screen-sized
   target, sampled by screen-space UV so the opening matches the frame pixel for
   pixel.
+  A pair placed face to face recurses correctly: while a level renders, the
+  portal rebinds its own quad as well as its partner, so a camera looking back
+  at the portal it belongs to never samples the target it is drawing into.
 - Composite in frame: the virtual camera renders without post-processing and
   without exposure control, and the quad hands the result to HDRP as emissive.
   The main camera's exposure, tonemapping, bloom and antialiasing then apply to
@@ -46,7 +49,6 @@ First public release.
 
 ### Known issues
 
-- Two portals placed face to face overwrite each other's view.
 - Motion vectors inside the opening belong to the quad rather than to the content.
 - Depth of field over-blurs the opening in the last centimetres before crossing.
 - The Seam check does not build, failing during scene serialization.

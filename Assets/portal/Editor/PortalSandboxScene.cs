@@ -11,8 +11,8 @@ using UnityEngine.SceneManagement;
 ///
 /// Ничего не замеряет и ничего не пишет на диск во время игры — этим занимается
 /// лаборатория в LabTools. Здесь только то, на что нужно посмотреть глазами:
-/// проход между двумя разными по цвету и свету комнатами и предметы, которые
-/// можно протолкнуть сквозь проём.
+/// проход между двумя разными по цвету и свету комнатами, пара порталов лицом
+/// друг к другу для рекурсии и предметы, которые можно протолкнуть сквозь проём.
 /// </summary>
 public static class PortalSandboxScene
 {
@@ -46,6 +46,7 @@ public static class PortalSandboxScene
             "Portal_ToRoomA", new Vector3(RoomSeparation, 1.5f, -6f), 0f);
         LinkPair(walkThroughA, walkThroughB);
 
+        CreateRecursionPair();
         CreateProps();
 
         Camera playerCamera = CreatePlayer();
@@ -109,9 +110,10 @@ public static class PortalSandboxScene
         volume.isGlobal = true;
         volume.sharedProfile = profile;
 
-        // Потолок уровней вынесен в сцену, чтобы его было где подкрутить: со
-        // значением по умолчанию хватает и на пару порталов, и на запас, но
-        // добавив свои проёмы, поднимать его придётся именно здесь.
+        // Потолок уровней поднят: порталов в сцене четыре, и пара на рекурсию
+        // просит по пять уровней каждая. Со значением по умолчанию бюджет
+        // кончается на проходе между комнатами, и пара на рекурсию остаётся
+        // с пустыми проёмами.
         var budgetObject = new GameObject("Portal Budget");
         SetPrivateInt(budgetObject.AddComponent<PortalBudget>(), "levels", 16);
     }
@@ -190,7 +192,37 @@ public static class PortalSandboxScene
         Prop(room.transform, PrimitiveType.Cube, "Pillar_Yellow",
             new Vector3(2.5f, 1.2f, 4f), new Vector3(0.6f, 2.4f, 0.6f),
             "Pillar_Yellow", new Color(0.9f, 0.75f, 0.1f));
-    }    /// <summary>Предметы с физикой: их можно толкать и проталкивать сквозь проём.</summary>
+    }    /// <summary>
+    /// Пара лицом к лицу: в ней видна рекурсия. Стоит в стороне от прохода между
+    /// комнатами, чтобы одно не мешало другому. Глубина рекурсии здесь больше,
+    /// чем у прохода: ради неё пара и поставлена.
+    /// </summary>
+    private static void CreateRecursionPair()
+    {
+        var area = new GameObject("Recursion_Pair");
+        area.transform.position = new Vector3(RoomSeparation * 0.5f, 0f, 14f);
+
+        Portal facing = PlacePortal(
+            "Portal_Facing_A", area.transform.position + new Vector3(-4f, 1.5f, 0f), 90f);
+        Portal faced = PlacePortal(
+            "Portal_Facing_B", area.transform.position + new Vector3(4f, 1.5f, 0f), -90f);
+        LinkPair(facing, faced);
+
+        facing.recursionDepth = 4;
+        faced.recursionDepth = 4;
+        EditorUtility.SetDirty(facing);
+        EditorUtility.SetDirty(faced);
+
+        facing.transform.SetParent(area.transform, true);
+        faced.transform.SetParent(area.transform, true);
+
+        // Столб между ними: без предмета в кадре повторы неотличимы друг от друга.
+        Prop(area.transform, PrimitiveType.Cylinder, "Recursion_Marker",
+            new Vector3(0f, 1f, 0.8f), new Vector3(0.4f, 1f, 0.4f),
+            "Marker_Recursion", new Color(0.85f, 0.35f, 0.75f));
+    }
+
+    /// <summary>Предметы с физикой: их можно толкать и проталкивать сквозь проём.</summary>
     private static void CreateProps()
     {
         var box = new GameObject("Throwables");

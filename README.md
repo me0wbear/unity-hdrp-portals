@@ -142,9 +142,6 @@ Read this section. It is the honest list.
 
 - **The opening must be a real hole in the geometry.** A portal laid over a solid
   wall will show the inside of that wall from close up.
-- **Two portals facing each other overwrite each other's view.** Each chain
-  writes its target onto the other's quad, and one of them ends up blank. Place
-  a facing pair at an angle for now.
 - **Motion vectors inside the opening belong to the quad, not to what is seen
   through it.** Fast camera movement leaves a faint trail on the content. Taking
   the real vectors from the virtual camera was tried and reverted: what it
