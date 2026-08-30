@@ -56,17 +56,10 @@ public sealed class PortalRenderer
     // камеры. Уровни глубже видны уже внутри чужого таргета, и своя глубина им
     // не нужна.
     private RTHandle _contentDepth;
-    private RTHandle _contentMotion;
     private RenderTexture _contentDepthTexture;
-    private RenderTexture _contentMotionTexture;
 
     /// <summary>Глубина того, что видно сквозь проём, в кодировке устройства.</summary>
-    public RTHandle ContentDepth => _active ? _contentDepth : null;
-
-    /// <summary>Экранное движение того, что видно сквозь проём.</summary>
-    public RTHandle ContentMotion => _active ? _contentMotion : null;
-
-    /// <summary>
+    public RTHandle ContentDepth => _active ? _contentDepth : null;    /// <summary>
     /// Обратная матрица проекции нулевого уровня. Нужна, чтобы развернуть глубину
     /// обратно в расстояние: проекция косая, и обычная линеаризация по ближней и
     /// дальней плоскости для неё неверна.
@@ -102,7 +95,6 @@ public sealed class PortalRenderer
         Subscribe();
         EnsureCapacity(levels, viewer);
         _active = true;
-
         for (int level = 0; level < _cameras.Length; level++)
         {
             Camera camera = _cameras[level];
@@ -346,8 +338,7 @@ public sealed class PortalRenderer
         // здесь, после того как все уровни уже посчитаны.
         if (ReferenceEquals(camera, _portal.playerCamera))
         {
-            _portal.SetViewTexture(_targets[0]);
-            _portal.SetContentBuffers(_contentDepth, _contentMotion, ContentInverseProjection);
+            _portal.SetViewTexture(_targets[0]);            _portal.SetContentBuffers(_contentDepth, ContentInverseProjection);
             return;
         }
 
@@ -485,11 +476,7 @@ public sealed class PortalRenderer
         // владеем сами и убираем её обычным порядком.
         _contentDepthTexture = CreateContentTexture(
             width, height, GraphicsFormat.R32_SFloat, _portal.name + "_ContentDepth");
-        _contentMotionTexture = CreateContentTexture(
-            width, height, GraphicsFormat.R16G16_SFloat, _portal.name + "_ContentMotion");
-
         _contentDepth = RTHandles.Alloc(_contentDepthTexture);
-        _contentMotion = RTHandles.Alloc(_contentMotionTexture);
 
         if (!_cameras[0].TryGetComponent(out HDAdditionalCameraData data))
         {
@@ -501,7 +488,7 @@ public sealed class PortalRenderer
             AOVRequest.NewDefault(),
             AllocateContentBuffer,
             null,
-            new[] { AOVBuffers.DepthStencil, AOVBuffers.MotionVectors },
+            new[] { AOVBuffers.DepthStencil },
             (cmd, buffers, properties) => { });
 
         data.SetAOVRequests(builder.Build());
@@ -546,10 +533,7 @@ public sealed class PortalRenderer
         switch (bufferId)
         {
             case AOVBuffers.DepthStencil:
-                return _contentDepth;
-            case AOVBuffers.MotionVectors:
-                return _contentMotion;
-            default:
+                return _contentDepth;            default:
                 return null;
         }
     }
@@ -564,7 +548,6 @@ public sealed class PortalRenderer
         }
 
         ReleaseContentTexture(ref _contentDepth, ref _contentDepthTexture);
-        ReleaseContentTexture(ref _contentMotion, ref _contentMotionTexture);
     }
 
     private RenderTexture CreateTarget(int width, int height, int level)
@@ -692,7 +675,18 @@ public sealed class PortalRenderer
             }
         }
 
-        // Множитель два обязателен. Пайплайн применяет джиттер, сдвигая обе
+        // Матрица без дрожания сообщается отдельно и до того, как дрожание
+        // добавлено. Векторы движения считаются по разнице матриц соседних
+        // кадров, и брать для этого матрицу с дрожанием нельзя: дрожание меняется
+        // каждый кадр по своей последовательности, разница матриц принимает его
+        // за движение камеры, и в буфер уходит смещение размером с дрожание в
+        // случайную сторону. Временное сглаживание послушно собирает кадр по
+        // этому смещению и превращает вид в проёме в мыло, пока всё вокруг
+        // остаётся резким. Поле для того и заведено, чтобы разделить эти две
+        // матрицы; без него пайплайн считает поданную ему матрицу нежитерованной.
+        camera.nonJitteredProjectionMatrix = projection;
+
+        // Множитель два обязателен. Пайплайн применяет дрожание, сдвигая обе
         // границы пирамиды видимости на одну и ту же величину: для матрицы
         // проекции это даёт сдвиг элемента m02 на удвоенное значение, потому
         // что он равен сумме границ, делённой на их разность. Компоненты z и w

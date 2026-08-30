@@ -135,8 +135,7 @@ public sealed class PortalSystem : MonoBehaviour
     {
         return portal != null
             && Renderers.TryGetValue(portal, out PortalRenderer renderer)
-            && renderer.ContentDepth != null
-            && renderer.ContentMotion != null;
+            && renderer.ContentDepth != null;
     }
 
     private void LateUpdate()

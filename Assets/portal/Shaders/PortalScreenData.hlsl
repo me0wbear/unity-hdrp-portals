@@ -32,6 +32,10 @@ void GetSurfaceAndBuiltinData(
     out SurfaceData surfaceData,
     out BuiltinData builtinData)
 {
+    // Выборка по нормализованным экранным координатам, а не по номеру текселя:
+    // делитель разрешения портала — открытая настройка, и при значении больше
+    // единицы таргет меньше экрана, а по номеру текселя выборка ушла бы за его
+    // границы почти на всей площади проёма.
     float2 screenUv = posInput.positionNDC.xy;
     float3 view = SAMPLE_TEXTURE2D_LOD(_MainTex, s_linear_clamp_sampler, screenUv, 0).rgb;
 
