@@ -88,19 +88,44 @@ public sealed class PortalCameraBridge : MonoBehaviour
         Vector3 oldPosition = context.Transform.inverse.MultiplyPoint(newPosition);
         Vector3 delta = newPosition - oldPosition;
 
-        CinemachineCore.OnTargetObjectWarped(transform, delta);
+        WarpTarget(transform, delta);
 
         if (brain.ActiveVirtualCamera is CinemachineVirtualCameraBase active)
         {
+            // Камера следит не обязательно за корнем: обычно цель — держатель
+            // камеры, дочерний объект игрока. Сообщение о переносе сопоставляется
+            // с целью по ссылке, поэтому корня мало: не совпав, оно молча ничего
+            // не делает, а камера потом навёрстывает разрыв с демпфированием и
+            // даёт рывок через кадр после перехода.
+            WarpTarget(active.Follow, delta);
+            WarpTarget(active.LookAt, delta);
+
             active.OnTargetObjectWarped(transform, delta);
-            active.ForceCameraPosition(
-                context.Transform.MultiplyPoint(active.transform.position),
-                context.Rotation * active.transform.rotation);
+
+            // Принудительно ставить позу камеры здесь нельзя. Камера с
+            // демпфированием всегда отстаёт от цели, и любая установка позы
+            // это отставание обнуляет: камера прыгает вперёд, а потом заново
+            // разгоняется с нуля. Замер CrossCheck по камере Cinemachine:
+            // с принудительной установкой шаг на переходе доходил до 0,518 при
+            // номинале 0,050, без неё максимум 0,064. Сообщение о переносе —
+            // штатный механизм Cinemachine для телепорта, и его достаточно.
         }
 
         // Переход — это склейка, а не движение. Незакрытый переход между кадрами
         // проехал бы весь путь от старой позы к новой на глазах у игрока.
         brain.ResetState();
+    }
+
+    /// <summary>
+    /// Сообщает о переносе одной цели. Дубли безвредны: Cinemachine сопоставляет
+    /// цель по ссылке и на незнакомую просто не реагирует.
+    /// </summary>
+    private static void WarpTarget(Transform target, Vector3 delta)
+    {
+        if (target != null)
+        {
+            CinemachineCore.OnTargetObjectWarped(target, delta);
+        }
     }
 
     /// <summary>
