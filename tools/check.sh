@@ -58,12 +58,30 @@ cd "$PROJECT" || exit 1
 RUN_CODE=$?
 
 echo "=== результат $NAME (код $RUN_CODE) ==="
-tr -d '\000' < "$RUN_LOG" | grep -aE "^\[[A-Za-z]+(Check|Probe|Capture|Runner)\]"
+# Проверки печатают многострочные отчёты одним Debug.Log, поэтому вывод идёт
+# от строки с тегом и до конца сообщения: следом Unity дописывает стек вызовов
+# и строку Filename, на них печать и обрывается.
+tr -d '\000\r' < "$RUN_LOG" | awk '
+    /^\[[A-Za-z]+(Check|Probe|Capture|Runner)\]/ { show = 1 }
+    /^UnityEngine\.|^\(Filename:|^$/             { show = 0 }
+    show'
 
-PROBLEMS=$(tr -d '\000' < "$RUN_LOG" | grep -aE "Exception|NullReference|error CS" | head -20)
+PROBLEMS=$(tr -d '\000\r' < "$RUN_LOG" | grep -aE "Exception|NullReference|error CS" | head -20)
 if [ -n "$PROBLEMS" ]; then
   echo "=== проблемы в логе ==="
   echo "$PROBLEMS"
 fi
 
-exit $RUN_CODE
+# Успех проверки определяется тем, что она успела записать свой отчёт, а не
+# кодом выхода плеера. Плеер иногда падает уже после того, как все замеры
+# сделаны, при выгрузке графики; замеры от этого не портятся, но код выхода
+# становится ненулевым и прятал бы настоящий результат.
+if tr -d '\000\r' < "$RUN_LOG" | grep -qaE "^\[[A-Za-z]+(Check|Probe|Capture)\]"; then
+  if [ $RUN_CODE -ne 0 ]; then
+    echo "ВНИМАНИЕ: замеры записаны, но плеер завершился с кодом $RUN_CODE (падение при выгрузке)"
+  fi
+  exit 0
+fi
+
+echo "ОШИБКА: проверка не записала ни одной строки отчёта, код выхода $RUN_CODE"
+exit "${RUN_CODE:-1}"

@@ -98,11 +98,20 @@ public sealed class Portal : MonoBehaviour
     }
 
     /// <summary>
+    /// Текстура, которая лежит на квадре прямо сейчас. Нужна тому, кто её сюда
+    /// положил, чтобы снять её перед уничтожением: чужой портал не должен
+    /// остаться со ссылкой на освобождённую память.
+    /// </summary>
+    public Texture ViewTexture { get; private set; }
+
+    /// <summary>
     /// Кладёт текстуру вида на квад. Через блок свойств, а не через материал:
     /// материал общий для всех порталов, и запись в него склеила бы их виды.
     /// </summary>
     public void SetViewTexture(Texture texture)
     {
+        ViewTexture = texture;
+
         if (screen == null)
         {
             return;

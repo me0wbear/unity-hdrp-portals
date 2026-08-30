@@ -58,6 +58,12 @@ Shader "Portals/PortalScreen"
     {
         Tags { "RenderPipeline" = "HDRenderPipeline" "RenderType" = "HDUnlitShader" }
 
+        // Отсечение граней выключено во всех проходах. Встроенный Quad в Unity
+        // имеет нормали в минус Z, а локальная ось +Z портала смотрит на игрока:
+        // при отсечении задних граней квад был бы виден только с изнанки портала.
+        // Решать это разворотом квада нельзя — его ориентацию задаёт тот, кто
+        // собирает сцену, и она уже описана в SETUP.md.
+
         // Проход глубины. Нужен, чтобы квад попал в предпроход глубины: без него
         // основной проход не пройдёт сравнение с буфером и квад не нарисуется.
         Pass
@@ -73,7 +79,7 @@ Shader "Portals/PortalScreen"
                 Pass Replace
             }
 
-            Cull Back
+            Cull Off
             ZWrite On
 
             HLSLPROGRAM
@@ -113,7 +119,7 @@ Shader "Portals/PortalScreen"
                 Pass Replace
             }
 
-            Cull Back
+            Cull Off
             ZWrite On
 
             HLSLPROGRAM
@@ -156,7 +162,7 @@ Shader "Portals/PortalScreen"
                 Pass Replace
             }
 
-            Cull Back
+            Cull Off
 
             HLSLPROGRAM
 
@@ -215,3 +221,4 @@ Shader "Portals/PortalScreen"
 
     Fallback Off
 }
+

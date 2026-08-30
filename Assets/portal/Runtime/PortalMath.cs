@@ -83,14 +83,32 @@ public static class PortalMath
     }
 
     /// <summary>
-    /// Расстояние от камеры до дальнего угла её ближней плоскости, умноженное на запас.
-    /// На эту величину квад портала выдвигается навстречу камере вблизи, иначе
-    /// ближняя плоскость прорезает квад и в углах экрана появляется просвет.
+    /// На каком расстоянии от наблюдателя держать квад портала, когда тот подошёл
+    /// вплотную.
+    ///
+    /// Требований два, и они тянут в разные стороны. Снизу: расстояние обязано
+    /// быть больше ближней плоскости, иначе квад срежется и проём погаснет.
+    /// Сверху: квад конечного размера закрывает весь экран только пока он
+    /// достаточно близко, а отодвинув его слишком далеко, получаем по краям
+    /// экрана просвет.
+    ///
+    /// Верхний предел считается по обеим осям и берётся меньший. Если проём
+    /// настолько мал, что закрыть экран нечем, побеждает нижнее требование:
+    /// лучше видимые края, чем погасший проём.
     /// </summary>
-    public static float NearPlaneThickness(Camera camera, float safetyFactor)
+    public static float ScreenHoldDistance(Camera camera, Vector2 opening, float safetyFactor)
     {
-        float halfHeight = camera.nearClipPlane * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad);
-        float halfWidth = halfHeight * camera.aspect;
-        return new Vector3(halfWidth, halfHeight, camera.nearClipPlane).magnitude * safetyFactor;
+        float minimum = camera.nearClipPlane * 1.05f;
+        float wanted = camera.nearClipPlane * Mathf.Max(1.05f, safetyFactor);
+
+        float halfFovVertical = camera.fieldOfView * 0.5f * Mathf.Deg2Rad;
+        float tanVertical = Mathf.Max(Mathf.Tan(halfFovVertical), 1e-4f);
+        float tanHorizontal = Mathf.Max(tanVertical * camera.aspect, 1e-4f);
+
+        float limit = Mathf.Min(
+            opening.y * 0.5f / tanVertical,
+            opening.x * 0.5f / tanHorizontal);
+
+        return Mathf.Max(minimum, Mathf.Min(wanted, limit));
     }
 }

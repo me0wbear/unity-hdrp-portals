@@ -71,9 +71,27 @@ public sealed class PortalSystem : MonoBehaviour
             return;
         }
 
-        var host = new GameObject("PortalSystem") { hideFlags = HideFlags.HideAndDontSave };
+        var host = new GameObject("PortalSystem");
         _instance = host.AddComponent<PortalSystem>();
         DontDestroyOnLoad(host);
+
+        // Порядок вызова OnDestroy при выходе не определён, а камеры порталов
+        // держат таргеты и подписку на события пайплайна. Освобождаем их по
+        // явному сигналу выхода, пока пайплайн ещё жив.
+        Application.quitting += ReleaseAll;
+    }
+
+    /// <summary>
+    /// Освобождает всё немедленно. Вызывается по сигналу выхода: отложенное
+    /// уничтожение к этому моменту уже не отработает, и камеры с таргетами
+    /// дожили бы до выгрузки пайплайна.
+    /// </summary>
+    private static void ReleaseAll()
+    {
+        foreach (PortalRenderer renderer in Renderers.Values)
+        {
+            renderer.Release();
+        }
     }
 
     private void LateUpdate()
@@ -107,10 +125,8 @@ public sealed class PortalSystem : MonoBehaviour
 
     private void OnDestroy()
     {
-        foreach (PortalRenderer renderer in Renderers.Values)
-        {
-            renderer.Release();
-        }
+        Application.quitting -= ReleaseAll;
+        ReleaseAll();
 
         Renderers.Clear();
         Portals.Clear();

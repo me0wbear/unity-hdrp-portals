@@ -237,34 +237,89 @@ public sealed class PortalMathTests
         Assert.IsFalse(PortalMath.IsInsideOpening(_entrance, new Vector3(0f, 0f, 1.8f), size, 0f));
     }
 
-    /// <summary>
-    /// Толщина, на которую квад выдвигается навстречу камере, должна покрывать
-    /// расстояние до угла ближней плоскости, иначе в углах экрана появится просвет.
-    /// </summary>
+    /// <summary>Расстояние удержания обязано остаться за ближней плоскостью.</summary>
     [Test]
-    public void NearPlaneThickness_CoversTheNearPlaneCorner()
+    public void ScreenHoldDistance_StaysBeyondTheNearPlane()
     {
         var cameraObject = new GameObject("Camera");
         try
         {
-            Camera camera = cameraObject.AddComponent<Camera>();
-            camera.nearClipPlane = 0.05f;
-            camera.fieldOfView = 60f;
-            camera.aspect = 16f / 9f;
+            Camera camera = MakeCamera(cameraObject, near: 0.05f, fov: 60f);
+            var opening = new Vector2(2.2f, 3.2f);
 
-            float thickness = PortalMath.NearPlaneThickness(camera, 1f);
-
-            float halfHeight = camera.nearClipPlane * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad);
-            float halfWidth = halfHeight * camera.aspect;
-            float corner = new Vector3(halfWidth, halfHeight, camera.nearClipPlane).magnitude;
-
-            Assert.That(thickness, Is.EqualTo(corner).Within(1e-5f));
-            Assert.That(PortalMath.NearPlaneThickness(camera, 2f),
-                Is.EqualTo(corner * 2f).Within(1e-5f));
+            foreach (float safety in new[] { 0f, 0.5f, 1f, 2f, 10f })
+            {
+                float hold = PortalMath.ScreenHoldDistance(camera, opening, safety);
+                Assert.That(hold, Is.GreaterThan(camera.nearClipPlane),
+                    "при запасе " + safety + " квад оказался бы за ближней плоскостью");
+            }
         }
         finally
         {
             Object.DestroyImmediate(cameraObject);
         }
+    }
+
+    /// <summary>
+    /// На расстоянии удержания квад обязан закрывать весь экран. Иначе по краям
+    /// видно то, что за порталом, — это и есть просвет, который ловит CloseCheck.
+    /// </summary>
+    [Test]
+    public void ScreenHoldDistance_KeepsTheOpeningCoveringTheWholeScreen()
+    {
+        var cameraObject = new GameObject("Camera");
+        try
+        {
+            // Ближняя плоскость по умолчанию: именно с ней собраны чек-сцены,
+            // и именно на ней расчёт по углу ближней плоскости давал перелёт.
+            Camera camera = MakeCamera(cameraObject, near: 0.3f, fov: 60f);
+            var opening = new Vector2(2.2f, 3.2f);
+
+            float hold = PortalMath.ScreenHoldDistance(camera, opening, 2f);
+
+            float tanVertical = Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            float tanHorizontal = tanVertical * camera.aspect;
+
+            Assert.That(hold * tanHorizontal, Is.LessThanOrEqualTo(opening.x * 0.5f + 1e-4f),
+                "по горизонтали квад не закрывает экран");
+            Assert.That(hold * tanVertical, Is.LessThanOrEqualTo(opening.y * 0.5f + 1e-4f),
+                "по вертикали квад не закрывает экран");
+        }
+        finally
+        {
+            Object.DestroyImmediate(cameraObject);
+        }
+    }
+
+    /// <summary>
+    /// Узкий проём закрыть экран не может ни на каком расстоянии. Тогда
+    /// побеждает нижнее требование: лучше видимые края, чем погасший проём.
+    /// </summary>
+    [Test]
+    public void ScreenHoldDistance_PrefersStayingVisibleWhenTheOpeningIsTooNarrow()
+    {
+        var cameraObject = new GameObject("Camera");
+        try
+        {
+            Camera camera = MakeCamera(cameraObject, near: 0.3f, fov: 60f);
+
+            float hold = PortalMath.ScreenHoldDistance(camera, new Vector2(0.05f, 0.05f), 2f);
+
+            Assert.That(hold, Is.GreaterThan(camera.nearClipPlane));
+        }
+        finally
+        {
+            Object.DestroyImmediate(cameraObject);
+        }
+    }
+
+    private static Camera MakeCamera(GameObject host, float near, float fov)
+    {
+        Camera camera = host.AddComponent<Camera>();
+        camera.nearClipPlane = near;
+        camera.farClipPlane = 500f;
+        camera.fieldOfView = fov;
+        camera.aspect = 16f / 9f;
+        return camera;
     }
 }

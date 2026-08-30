@@ -10,9 +10,10 @@ using UnityEngine;
 /// BubbleCheck.
 ///
 /// Решение. Вблизи квад отодвигается от наблюдателя вдоль нормали портала ровно
-/// настолько, чтобы расстояние до него всегда равнялось запасу thickness. Тогда
-/// он никогда не попадает за ближнюю плоскость и при этом остаётся достаточно
-/// близко, чтобы закрывать весь экран.
+/// настолько, чтобы расстояние до него равнялось расстоянию удержания. Оно
+/// подобрано так, чтобы квад одновременно не попадал за ближнюю плоскость и
+/// оставался достаточно близко, чтобы закрывать весь экран: см.
+/// PortalMath.ScreenHoldDistance.
 ///
 /// Почему сдвиг ничего не портит. Шейдер квада выбирает вид по экранным
 /// координатам, а не по развёртке, поэтому сдвиг самого квада не двигает
@@ -35,27 +36,29 @@ public static class PortalAperture
 
         Transform screen = portal.screen.transform;
 
-        float thickness = PortalMath.NearPlaneThickness(viewer, portal.clippingSafetyFactor);
+        float hold = PortalMath.ScreenHoldDistance(
+            viewer, portal.OpeningSize, portal.clippingSafetyFactor);
         float distance = PortalMath.SignedDistance(portal.transform, viewer.transform.position);
 
-        screen.localPosition = new Vector3(0f, 0f, Offset(distance, thickness));
+        screen.localPosition = new Vector3(0f, 0f, Offset(distance, hold));
     }
 
     /// <summary>
     /// Смещение квада вдоль локальной оси Z портала.
     ///
-    /// Дальше запаса квад стоит в плоскости проёма. Ближе — отодвигается так,
-    /// чтобы расстояние от наблюдателя до него равнялось запасу. На самой границе
-    /// обе ветки дают ноль, поэтому переход между ними непрерывный и рывка нет.
+    /// Дальше расстояния удержания квад стоит в плоскости проёма. Ближе —
+    /// отодвигается так, чтобы расстояние от наблюдателя до него равнялось
+    /// удержанию. На самой границе обе ветки дают ноль, поэтому переход между
+    /// ними непрерывный и рывка нет.
     /// </summary>
-    public static float Offset(float signedDistance, float thickness)
+    public static float Offset(float signedDistance, float holdDistance)
     {
-        if (Mathf.Abs(signedDistance) >= thickness)
+        if (Mathf.Abs(signedDistance) >= holdDistance)
         {
             return 0f;
         }
 
         float side = signedDistance >= 0f ? 1f : -1f;
-        return signedDistance - side * thickness;
+        return signedDistance - side * holdDistance;
     }
 }

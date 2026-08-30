@@ -25,14 +25,18 @@ public sealed class PortalRenderer
     private Camera[] _cameras = System.Array.Empty<Camera>();
     private RenderTexture[] _targets = System.Array.Empty<RenderTexture>();
     private bool _subscribed;
+    private bool _reported;
+
+    /// <summary>Рендерит ли портал прямо сейчас. Приостановленный бюджет не занимает.</summary>
+    private bool _active;
 
     public PortalRenderer(Portal portal)
     {
         _portal = portal;
     }
 
-    /// <summary>Сколько уровней сейчас живо. Ноль означает, что портал не рендерится.</summary>
-    public int LevelCount => _cameras.Length;
+    /// <summary>Сколько уровней рендерится прямо сейчас. Приостановленный портал даёт ноль.</summary>
+    public int LevelCount => _active ? _cameras.Length : 0;
 
     /// <summary>
     /// Готовит позы и таргеты уровней. Вызывается раз в кадр из
@@ -42,16 +46,17 @@ public sealed class PortalRenderer
     {
         if (_portal.exitPortal == null || _portal.screen == null || viewer == null || levels < 1)
         {
-            Release();
+            Suspend();
             return;
         }
 
         if (!IsVisible(viewer))
         {
-            Release();
+            Suspend();
             return;
         }
 
+        Resume();
         Subscribe();
         EnsureCapacity(levels, viewer);
 
@@ -66,15 +71,82 @@ public sealed class PortalRenderer
         }
     }
 
-    /// <summary>Освобождает камеры и таргеты. Портал возвращается к цвету заглушки.</summary>
-    public void Release()
+    /// <summary>
+    /// Приостанавливает рендер, не разрушая камеры и таргеты. Именно это делается,
+    /// когда портал ушёл из видимости: он вернётся туда через кадр-другой, а
+    /// пересоздание камер треплет внутренний кеш пайплайна и стоит заметно
+    /// дороже, чем выключенная камера.
+    /// </summary>
+    private void Suspend()
     {
-        Unsubscribe();
+        _active = false;
+
+        if (_cameras.Length == 0)
+        {
+            return;
+        }
 
         for (int i = 0; i < _cameras.Length; i++)
         {
             if (_cameras[i] != null)
             {
+                _cameras[i].enabled = false;
+            }
+        }
+
+        ClearBindingOnExitPortal();
+
+        if (_portal != null)
+        {
+            _portal.SetViewTexture(null);
+        }
+    }
+
+    /// <summary>Включает камеры обратно после приостановки.</summary>
+    private void Resume()
+    {
+        _active = true;
+
+        for (int i = 0; i < _cameras.Length; i++)
+        {
+            if (_cameras[i] != null && !_cameras[i].enabled)
+            {
+                _cameras[i].enabled = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Полностью разрушает камеры и таргеты. Вызывается, только когда портал
+    /// выключен или уничтожен: на обычное уход из видимости есть Suspend.
+    ///
+    /// Уничтожение только отложенное. DestroyImmediate здесь пробовать не надо:
+    /// на выходе из приложения HDRP не переживает синхронного исчезновения
+    /// камеры, потому что свои HDCamera она прибирает в цикле рендера, которого
+    /// в этот момент уже не будет. Приложение падает после того, как вся уборка
+    /// модуля отработала, и выглядит это как чужая ошибка.
+    /// </summary>
+    public void Release()
+    {
+        Unsubscribe();
+
+        // Снять свои таргеты с квада парного портала. Уровни рекурсии кладут их
+        // именно туда, и без этой уборки парный портал остался бы со ссылкой на
+        // освобождённую память: следующий же кадр сэмплит её и валит приложение.
+        ClearBindingOnExitPortal();
+
+        // Порядок важен. Object.Destroy откладывает уничтожение до конца кадра,
+        // а RenderTexture.Release освобождает память на видеокарте немедленно.
+        // Если сначала освободить таргет, камера доживёт кадр со ссылкой на
+        // уже освобождённую память, и приложение упадёт. Поэтому камера сперва
+        // отвязывается от таргета и выключается, а таргеты уничтожаются так же
+        // отложенно, без ручного Release.
+        for (int i = 0; i < _cameras.Length; i++)
+        {
+            if (_cameras[i] != null)
+            {
+                _cameras[i].targetTexture = null;
+                _cameras[i].enabled = false;
                 Object.Destroy(_cameras[i].gameObject);
             }
         }
@@ -83,13 +155,13 @@ public sealed class PortalRenderer
         {
             if (_targets[i] != null)
             {
-                _targets[i].Release();
                 Object.Destroy(_targets[i]);
             }
         }
 
         _cameras = System.Array.Empty<Camera>();
         _targets = System.Array.Empty<RenderTexture>();
+        _active = false;
 
         if (_portal != null)
         {
@@ -97,8 +169,59 @@ public sealed class PortalRenderer
         }
     }
 
+    /// <summary>
+    /// Разовая проверка того, что вид вообще способен дойти до экрана. Ловит
+    /// случай, когда таргет исправно считается, а в проёме пусто: выключенный
+    /// рендерер, потерянный материал, неподдерживаемый шейдер. Молчит, когда
+    /// всё в порядке, — в лог попадает только то, что требует вмешательства.
+    /// </summary>
+    private void WarnOnBrokenScreenOnce()
+    {
+        if (_reported)
+        {
+            return;
+        }
+
+        _reported = true;
+
+        MeshRenderer screen = _portal.screen;
+        if (screen == null)
+        {
+            return;
+        }
+
+        if (!screen.enabled || !screen.gameObject.activeInHierarchy)
+        {
+            Debug.LogWarning("[Portal] " + _portal.name
+                + ": the screen renderer is disabled, the opening will stay empty");
+        }
+
+        Material material = screen.sharedMaterial;
+        if (material == null)
+        {
+            Debug.LogWarning("[Portal] " + _portal.name
+                + ": the screen has no material, assign PortalScreenMat");
+            return;
+        }
+
+        if (material.shader == null || !material.shader.isSupported)
+        {
+            Debug.LogWarning("[Portal] " + _portal.name
+                + ": shader " + (material.shader != null ? material.shader.name : "NONE")
+                + " is not supported on this platform");
+        }
+
+        if (!material.HasProperty("_MainTex"))
+        {
+            Debug.LogWarning("[Portal] " + _portal.name
+                + ": material " + material.name + " has no _MainTex, the view cannot be bound");
+        }
+    }
+
     private void Subscribe()
     {
+        WarnOnBrokenScreenOnce();
+
         if (!_subscribed)
         {
             RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
@@ -127,6 +250,13 @@ public sealed class PortalRenderer
             return;
         }
 
+        // Между отпиской и последним вызовом события таргеты могли уже уйти
+        // на уничтожение: обращаться к ним в этот кадр нельзя.
+        if (_targets.Length == 0 || _targets[0] == null)
+        {
+            return;
+        }
+
         // Наблюдатель рисуется последним, поэтому свой вид портал возвращает себе
         // здесь, после того как все уровни уже посчитаны.
         if (ReferenceEquals(camera, _portal.playerCamera))
@@ -146,6 +276,29 @@ public sealed class PortalRenderer
         // уровня источника нет, и проём заливается цветом заглушки.
         Texture content = level + 1 < _targets.Length ? _targets[level + 1] : null;
         _portal.exitPortal.SetViewTexture(content);
+    }
+
+    /// <summary>
+    /// Снимает с квада парного портала текстуру, если там лежит один из наших
+    /// таргетов. Чужую привязку не трогает: парный портал показывает свой вид,
+    /// и обнулять его вслепую значило бы гасить его проём на кадр.
+    /// </summary>
+    private void ClearBindingOnExitPortal()
+    {
+        Portal exit = _portal != null ? _portal.exitPortal : null;
+        if (exit == null || exit.ViewTexture == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < _targets.Length; i++)
+        {
+            if (ReferenceEquals(_targets[i], exit.ViewTexture))
+            {
+                exit.SetViewTexture(null);
+                return;
+            }
+        }
     }
 
     /// <summary>Свой ли это уровень. Сравнение по ссылке, без аллокаций.</summary>
@@ -237,10 +390,11 @@ public sealed class PortalRenderer
     /// </summary>
     private Camera CreateCamera(Camera viewer, int level, RenderTexture target)
     {
-        var cameraObject = new GameObject(_portal.name + "_Camera_" + level)
-        {
-            hideFlags = HideFlags.HideAndDontSave
-        };
+        // Без hideFlags: объект живёт только в рантайме и должен выгружаться
+        // обычным порядком. HideAndDontSave снимает его с автоматической
+        // очистки, и камера переживает выгрузку сцены вместе со своим таргетом.
+        // Заодно её видно в иерархии во время игры, что помогает при разборе.
+        var cameraObject = new GameObject(_portal.name + "_Camera_" + level);
         cameraObject.transform.SetParent(_portal.transform, false);
 
         Camera camera = cameraObject.AddComponent<Camera>();
@@ -275,9 +429,44 @@ public sealed class PortalRenderer
         data.renderingPathCustomFrameSettings.SetEnabled(field, value);
     }
 
+    /// <summary>
+    /// Ставит виртуальной камере проекцию наблюдателя, срезанную плоскостью выхода
+    /// и сдвинутую тем же субпиксельным джиттером.
+    ///
+    /// Косая ближняя плоскость отсекает всё, что стоит между парным порталом и
+    /// виртуальной камерой. Без неё в проём попадает геометрия позади выхода:
+    /// стены, арки, косяки — всё, мимо чего наблюдатель на самом деле уже прошёл.
+    ///
+    /// Джиттер копируется у наблюдателя, потому что содержимое портала должно
+    /// дрожать в тех же долях пикселя, что и остальная геометрия. Иначе временное
+    /// сглаживание главной камеры получает по проёму постоянную выборку и
+    /// обрабатывает его иначе, чем всё вокруг.
+    ///
+    /// Порядок важен: поза камере уже выставлена, потому что плоскость считается
+    /// в её пространстве через worldToCameraMatrix.
+    /// </summary>
     private void ApplyProjection(Camera viewer, Camera camera)
     {
         CopyLens(viewer, camera);
+
+        // Обязательно: CalculateObliqueMatrix строит результат поверх текущей
+        // матрицы проекции, а там лежит косая матрица прошлого кадра. Без сброса
+        // наклон накапливался бы кадр за кадром, и вид схлопнулся бы в полосу.
+        camera.ResetProjectionMatrix();
+
+        Transform exit = _portal.exitPortal.transform;
+        Vector4 plane = PortalMath.CameraSpacePlane(
+            camera, exit.position, exit.forward, _portal.clippingOffset);
+
+        Matrix4x4 projection = camera.CalculateObliqueMatrix(plane);
+
+        // taaJitter уже поделён на размер экрана в компонентах z и w, что и
+        // требуется для сдвига матрицы проекции.
+        Vector4 jitter = HDCamera.GetOrCreate(viewer).taaJitter;
+        projection.m02 += jitter.z;
+        projection.m12 += jitter.w;
+
+        camera.projectionMatrix = projection;
     }
 
     private static void CopyLens(Camera viewer, Camera camera)
