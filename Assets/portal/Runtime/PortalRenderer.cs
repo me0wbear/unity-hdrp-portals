@@ -562,10 +562,27 @@ public sealed class PortalRenderer
         camera.ResetProjectionMatrix();
 
         Transform exit = _portal.exitPortal.transform;
-        Vector4 plane = PortalMath.CameraSpacePlane(
-            camera, exit.position, exit.forward, _portal.clippingOffset);
 
-        Matrix4x4 projection = camera.CalculateObliqueMatrix(plane);
+        // Косая плоскость двигает ближнюю плоскость камеры на себя. Если она
+        // окажется ближе штатной ближней плоскости, матрица вырождается и в
+        // таргет попадает мусор: содержимое проёма схлопывается в небо. Так
+        // бывает в последние сантиметры перед переходом, когда виртуальная
+        // камера подходит к плоскости выхода вплотную. Отсекать там уже нечего —
+        // наблюдатель фактически в проёме, — поэтому проекция остаётся обычной.
+        float distanceToExit = Mathf.Abs(
+            PortalMath.SignedDistance(exit, camera.transform.position)) - _portal.clippingOffset;
+
+        Matrix4x4 projection;
+        if (distanceToExit > camera.nearClipPlane)
+        {
+            Vector4 plane = PortalMath.CameraSpacePlane(
+                camera, exit.position, exit.forward, _portal.clippingOffset);
+            projection = camera.CalculateObliqueMatrix(plane);
+        }
+        else
+        {
+            projection = camera.projectionMatrix;
+        }
 
         // taaJitter уже поделён на размер экрана в компонентах z и w, что и
         // требуется для сдвига матрицы проекции.

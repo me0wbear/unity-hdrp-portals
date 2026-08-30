@@ -35,11 +35,24 @@ public static class PortalAperture
         }
 
         Transform screen = portal.screen.transform;
+        Vector3 eye = viewer.transform.position;
 
         float hold = PortalMath.ScreenHoldDistance(
             viewer, portal.OpeningSize, portal.clippingSafetyFactor);
-        float distance = PortalMath.SignedDistance(portal.transform, viewer.transform.position);
 
+        // Сдвигать квад можно, только когда наблюдатель подошёл к самому проёму.
+        // Расстояния до плоскости для этого мало: плоскость бесконечна, и портал,
+        // стоящий в тридцати метрах вбок, но в той же плоскости, по одному лишь
+        // расстоянию выглядит стоящим вплотную. Его квад тогда выдвигается и
+        // закрывает вид виртуальной камере парного портала: сквозь один проём
+        // становится видна изнанка квада другого.
+        if (!PortalMath.IsInsideOpening(portal.transform, eye, portal.OpeningSize, hold))
+        {
+            screen.localPosition = Vector3.zero;
+            return;
+        }
+
+        float distance = PortalMath.SignedDistance(portal.transform, eye);
         screen.localPosition = new Vector3(0f, 0f, Offset(distance, hold));
     }
 
