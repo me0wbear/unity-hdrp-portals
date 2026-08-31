@@ -1,13 +1,14 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text;
+using Portals.Lab.Validation;
 using UnityEngine;
 
 /// <summary>
-/// Captures the same view of the same geometry from both sides of a portal transition. The
-/// portal pair is set up so the viewpoint just before the crossing and the viewpoint just after
-/// it are four centimetres apart, which makes the two frames the same picture. Anything that
-/// differs between them is what the player sees as the transition.
+/// Сравнивает заданные позы до и после перехода. Реальный Teleported здесь не измеряется.
+/// Метрика — нормализованный raw RGB из Texture2D.GetPixels, не HDR radiance.
 /// </summary>
 public sealed class ColorCheck : MonoBehaviour
 {
@@ -32,11 +33,28 @@ public sealed class ColorCheck : MonoBehaviour
     public float sampleFraction = 0.22f;
 
     private readonly Dictionary<string, Color> _samples = new Dictionary<string, Color>();
+    private readonly StringBuilder _metrics = new StringBuilder("step,r,g,b,sharpness,captureStatus\n");
+    private readonly StringBuilder _summary = new StringBuilder();
+    private bool _captureFailed;
+    private int _capturedFrames;
+    private PortalCheckRun _run;
 
     private IEnumerator Start()
     {
-        string directory = Path.Combine(Directory.GetCurrentDirectory(), outputDirectory);
-        Directory.CreateDirectory(directory);
+        _run = PortalCheckRun.Current;
+        if (_run != null && _run.IsCompleted) yield break;
+        string directory = _run != null ? _run.OutputDirectory
+            : Path.Combine(Directory.GetCurrentDirectory(), outputDirectory);
+        if (playerRoot == null || playerCamera == null || portalObjects == null || steps == null || steps.Length == 0)
+        {
+            Finish(new PortalCheckDecision("Failed", "Color configuration is incomplete."));
+            yield break;
+        }
+        if (!PrepareDirectory(directory))
+        {
+            Finish(new PortalCheckDecision("Failed", "Cannot create Color output directory."));
+            yield break;
+        }
 
         for (int f = 0; f < warmupFrames; f++)
         {
@@ -50,8 +68,8 @@ public sealed class ColorCheck : MonoBehaviour
 
         Report("far", "farThrough", "farDirect");
         Report("cross", "crossBefore", "crossAfter");
-
-        Application.Quit(0);
+        SaveMetrics(directory);
+        Finish(PortalCheckPolicy.Color(_samples, steps.Length, _captureFailed));
     }
 
     private IEnumerator Capture(string directory, Step step)
@@ -73,8 +91,7 @@ public sealed class ColorCheck : MonoBehaviour
 
         playerRoot.SetPositionAndRotation(step.pose, Quaternion.identity);
 
-        // Without this the tracker still holds the distance measured at the previous pose and
-        // reads the jump between them as a crossing, teleporting the player out of the shot.
+        // Перестановка поз не является реальным пересечением портала.
         if (traveller != null)
         {
             traveller.ResetPortalTracking();
@@ -87,15 +104,77 @@ public sealed class ColorCheck : MonoBehaviour
 
         yield return new WaitForEndOfFrame();
 
-        Texture2D frame = ScreenCapture.CaptureScreenshotAsTexture();
-        File.WriteAllBytes(Path.Combine(directory, step.name + ".png"), frame.EncodeToPNG());
-        Color mean = MeanCentre(frame);
-        _samples[step.name] = mean;
-        double sharpness = Sharpness(frame);
-        Destroy(frame);
+        CaptureFrame(directory, step);
+    }
 
-        Debug.Log("[ColorCheck] " + step.name + " at " + playerRoot.position.ToString("F2")
-            + " mean=" + Format(mean) + " sharpness=" + sharpness.ToString("F5"));
+    private bool PrepareDirectory(string directory)
+    {
+        try { Directory.CreateDirectory(directory); return true; }
+        catch (System.Exception) { return false; }
+    }
+
+    private void CaptureFrame(string directory, Step step)
+    {
+        Texture2D frame = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(step.name) || step.name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                throw new System.InvalidOperationException("Invalid capture name.");
+            frame = ScreenCapture.CaptureScreenshotAsTexture();
+            if (frame == null) throw new System.InvalidOperationException("No screenshot.");
+            byte[] png = frame.EncodeToPNG();
+            if (png == null || png.Length == 0) throw new System.InvalidOperationException("Empty screenshot.");
+            File.WriteAllBytes(Path.Combine(directory, step.name + ".png"), png);
+            Color mean = MeanCentre(frame);
+            double sharpness = Sharpness(frame);
+            if (!PortalCheckPolicy.Finite(sharpness)) throw new System.InvalidOperationException("Invalid sharpness.");
+            _samples[step.name] = mean;
+            _capturedFrames++;
+            _metrics.Append(step.name).Append(',').Append(mean.r.ToString("R", CultureInfo.InvariantCulture))
+                .Append(',').Append(mean.g.ToString("R", CultureInfo.InvariantCulture))
+                .Append(',').Append(mean.b.ToString("R", CultureInfo.InvariantCulture))
+                .Append(',').Append(sharpness.ToString("R", CultureInfo.InvariantCulture)).Append(",Captured\n");
+            Debug.Log("[ColorCheck] " + step.name + " mean=" + Format(mean)
+                + " sharpness=" + sharpness.ToString("F5", CultureInfo.InvariantCulture));
+        }
+        catch (System.Exception)
+        {
+            _captureFailed = true;
+            _metrics.Append("capture-failed,,,,,Failed\n");
+            _run?.RecordFailure("Color capture or artifact write failed.");
+        }
+        finally
+        {
+            if (frame != null) Destroy(frame);
+            _run?.RecordProgress(_capturedFrames, 0);
+            SaveMetrics(directory);
+        }
+    }
+
+    private void SaveMetrics(string directory)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "color-metrics.csv"), _metrics.ToString());
+            File.WriteAllText(Path.Combine(directory, "color-summary.txt"),
+                "Units: normalized raw capture RGB (Texture2D.GetPixels).\n"
+                + "Cross: pose comparison; crossingCount=0. Far: diagnostic only.\n" + _summary);
+        }
+        catch (System.Exception)
+        {
+            _captureFailed = true;
+            _run?.RecordFailure("Cannot persist Color metrics.");
+        }
+    }
+
+    private void Finish(PortalCheckDecision decision)
+    {
+        if (_run != null) _run.Complete("Color", decision.status, _capturedFrames, 0, decision.failureReason);
+        else
+        {
+            Debug.Log("[ColorCheck] uncertified " + decision.status + ": " + decision.failureReason);
+            Application.Quit(decision.status == "Passed" ? 0 : 1);
+        }
     }
 
     private void Report(string label, string first, string second)
@@ -108,8 +187,10 @@ public sealed class ColorCheck : MonoBehaviour
         Color delta = new Color(
             Mathf.Abs(a.r - b.r), Mathf.Abs(a.g - b.g), Mathf.Abs(a.b - b.b));
 
-        Debug.Log("[ColorCheck] " + label + " delta=" + Format(delta)
-            + " max=" + Mathf.Max(delta.r, Mathf.Max(delta.g, delta.b)).ToString("F4"));
+        string line = label + " delta=" + Format(delta) + " max="
+            + Mathf.Max(delta.r, Mathf.Max(delta.g, delta.b)).ToString("F6", CultureInfo.InvariantCulture);
+        _summary.AppendLine(line);
+        Debug.Log("[ColorCheck] " + line);
     }
 
     private Color MeanCentre(Texture2D frame)

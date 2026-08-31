@@ -91,9 +91,8 @@ public static class ColorCheckBuilder
         check.traveller = traveller;
         check.portalObjects = new[] { portalAObject, portalBObject };
 
-        // Signed distance to portal A is -z, so the approach steps read 3.0 m down to 0.02 m.
-        // crossBefore and crossAfter are the two frames the player actually sees either side of
-        // the teleport: four centimetres apart, so they must look the same.
+        // Расстояние до A равно -z. crossBefore/crossAfter сравнивают заданные позы,
+        // но не вызывают и не подтверждают реальное событие Teleported.
         check.steps = new[]
         {
             Step("farThrough", -3f, true),
@@ -113,7 +112,8 @@ public static class ColorCheckBuilder
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
-        EditorSceneManager.SaveScene(scene, ScenePath);
+        if (!EditorSceneManager.SaveScene(scene, ScenePath))
+            throw new UnityEditor.Build.BuildFailedException("Cannot save Color scene.");
         AssetDatabase.SaveAssets();
 
         string root = Path.Combine(Directory.GetCurrentDirectory(), "BuildColorCheck");
@@ -128,6 +128,8 @@ public static class ColorCheckBuilder
             options = BuildOptions.Development
         };
 
+        options = PortalCheckBuildIdentity.PrepareOptions(options,
+            System.Environment.GetEnvironmentVariable("PORTAL_CHECK_NAME"));
         UnityEditor.Build.Reporting.BuildReport report = BuildPipeline.BuildPlayer(options);
         Debug.Log("[ColorCheck] build result=" + report.summary.result);
         EditorApplication.Exit(
@@ -243,9 +245,18 @@ public static class ColorCheckBuilder
     {
         Directory.CreateDirectory(ProfileDirectory);
         string path = ProfileDirectory + "/" + name + ".asset";
-        AssetDatabase.DeleteAsset(path);
-        VolumeProfile profile = ScriptableObject.CreateInstance<VolumeProfile>();
-        AssetDatabase.CreateAsset(profile, path);
+        VolumeProfile profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(path);
+        if (profile == null)
+        {
+            profile = ScriptableObject.CreateInstance<VolumeProfile>();
+            AssetDatabase.CreateAsset(profile, path);
+        }
+        foreach (VolumeComponent component in profile.components)
+        {
+            if (component == null) continue;
+            component.active = false;
+            EditorUtility.SetDirty(component);
+        }
         return profile;
     }
 
@@ -255,6 +266,12 @@ public static class ColorCheckBuilder
     /// </summary>
     private static T AddOverride<T>(VolumeProfile profile) where T : VolumeComponent
     {
+        if (profile.TryGet(out T existing))
+        {
+            existing.active = true;
+            EditorUtility.SetDirty(existing);
+            return existing;
+        }
         T component = ScriptableObject.CreateInstance<T>();
         component.name = typeof(T).Name;
         component.hideFlags = HideFlags.HideInHierarchy;

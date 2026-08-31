@@ -1,10 +1,6 @@
 using UnityEngine;
 
-// Minimal stand-ins that match the type names, namespace and field signatures the portal
-// bridge looks for in UHFPS. They exist only so the reflection path can be exercised in this
-// lab without pulling the whole asset in. Field names and types mirror the real ones:
-//   UHFPS.Runtime.LookController      -> public Vector2 LookRotation, public ForwardStyle PlayerForward
-//   UHFPS.Runtime.PlayerStateMachine  -> public Vector3 Motion
+// Лабораторная заглушка для проверки reflection-моста, не реализация UHFPS.
 namespace UHFPS.Runtime
 {
     public class LookController : MonoBehaviour
@@ -19,7 +15,7 @@ namespace UHFPS.Runtime
 
         private void LateUpdate()
         {
-            // Same shape as the real one: rewrite transforms from the stored angles every frame.
+            // Воспроизводим обновление трансформов из сохранённых углов.
             if (PlayerForward == ForwardStyle.LookForward)
             {
                 if (head != null)
@@ -42,8 +38,4 @@ namespace UHFPS.Runtime
         }
     }
 
-    public class PlayerStateMachine : MonoBehaviour
-    {
-        public Vector3 Motion;
-    }
 }

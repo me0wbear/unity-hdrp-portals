@@ -21,6 +21,12 @@ public static class SeamCheckBuilder
 
     public static void BuildPlayer()
     {
+        PrepareScene();
+        BuildSavedScene();
+    }
+
+    public static void PrepareScene()
+    {
         Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
         var sunObject = new GameObject("Sun");
@@ -156,8 +162,51 @@ public static class SeamCheckBuilder
         check.frames = 160;
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
-        EditorSceneManager.SaveScene(scene, ScenePath);
+        if (!EditorSceneManager.SaveScene(scene, ScenePath))
+            throw new UnityEditor.Build.BuildFailedException("Cannot save Seam scene.");
         AssetDatabase.SaveAssets();
+
+        EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        ValidateSavedScene();
+    }
+
+    public static void ValidateSavedScene()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        if (scene.path != ScenePath) throw new UnityEditor.Build.BuildFailedException("Expected saved Seam scene.");
+        SeamCheck check = UnityEngine.Object.FindAnyObjectByType<SeamCheck>();
+        if (check == null || check.playerRoot == null || check.traveller == null || check.machine == null
+            || check.playerRoot.GetComponent<CharacterController>() == null)
+            throw new UnityEditor.Build.BuildFailedException("Saved Seam scene is missing required references.");
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            foreach (MonoBehaviour component in root.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                if (component == null) throw new UnityEditor.Build.BuildFailedException("Missing script in saved Seam scene.");
+                MonoScript script = MonoScript.FromMonoBehaviour(component);
+                if (script == null || !EditorUtility.IsPersistent(script) || script.GetClass() != component.GetType()
+                    || !AssetDatabase.TryGetGUIDAndLocalFileIdentifier(script, out string guid, out long localId)
+                    || string.IsNullOrEmpty(guid))
+                    throw new UnityEditor.Build.BuildFailedException("Nonpersistent script in saved Seam scene.");
+            }
+        }
+        PortalCameraBridge bridge = check.playerRoot.GetComponent<PortalCameraBridge>();
+        if (bridge == null) throw new UnityEditor.Build.BuildFailedException("Saved Seam bridge is missing.");
+        var serializedBridge = new SerializedObject(bridge);
+        var serializedTraveller = new SerializedObject(check.traveller);
+        if (serializedBridge.FindProperty("traveller").objectReferenceValue != check.traveller
+            || serializedBridge.FindProperty("gameplayCamera").objectReferenceValue == null
+            || serializedTraveller.FindProperty("viewPoint").objectReferenceValue == null)
+            throw new UnityEditor.Build.BuildFailedException("Saved Seam camera/traveller references are missing.");
+        Portal[] portals = UnityEngine.Object.FindObjectsByType<Portal>();
+        if (portals.Length != 2 || System.Array.Exists(portals, portal => portal.exitPortal == null || portal.playerCamera == null))
+            throw new UnityEditor.Build.BuildFailedException("Saved Seam portal pair is incomplete.");
+    }
+
+    public static void BuildSavedScene()
+    {
+        EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        ValidateSavedScene();
 
         string root = Path.Combine(Directory.GetCurrentDirectory(), "BuildSeamCheck");
         Directory.CreateDirectory(root);
@@ -171,6 +220,8 @@ public static class SeamCheckBuilder
             options = BuildOptions.Development
         };
 
+        options = PortalCheckBuildIdentity.PrepareOptions(options,
+            System.Environment.GetEnvironmentVariable("PORTAL_CHECK_NAME"));
         UnityEditor.Build.Reporting.BuildReport report = BuildPipeline.BuildPlayer(options);
         Debug.Log("[SeamCheck] build result=" + report.summary.result);
         EditorApplication.Exit(
@@ -248,14 +299,29 @@ public static class SeamCheckBuilder
     {
         Directory.CreateDirectory(ProfileDirectory);
         string path = ProfileDirectory + "/" + name + ".asset";
-        AssetDatabase.DeleteAsset(path);
-        VolumeProfile profile = ScriptableObject.CreateInstance<VolumeProfile>();
-        AssetDatabase.CreateAsset(profile, path);
+        VolumeProfile profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(path);
+        if (profile == null)
+        {
+            profile = ScriptableObject.CreateInstance<VolumeProfile>();
+            AssetDatabase.CreateAsset(profile, path);
+        }
+        foreach (VolumeComponent component in profile.components)
+        {
+            if (component == null) continue;
+            component.active = false;
+            EditorUtility.SetDirty(component);
+        }
         return profile;
     }
 
     private static T AddOverride<T>(VolumeProfile profile) where T : VolumeComponent
     {
+        if (profile.TryGet(out T existing))
+        {
+            existing.active = true;
+            EditorUtility.SetDirty(existing);
+            return existing;
+        }
         T component = ScriptableObject.CreateInstance<T>();
         component.name = typeof(T).Name;
         component.hideFlags = HideFlags.HideInHierarchy;
