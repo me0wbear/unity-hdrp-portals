@@ -30,6 +30,9 @@ public sealed class PortalRenderer
     private const float MinimumNearClip = 0.02f;
 
     private readonly Portal _portal;
+    private readonly Vector4[] _clipFirst = new Vector4[16];
+    private readonly Vector4[] _clipSecond = new Vector4[16];
+    private readonly Plane[] _rootPlanes = new Plane[6];
 
     private Camera[] _cameras = System.Array.Empty<Camera>();
     private RenderTexture[] _targets = System.Array.Empty<RenderTexture>();
@@ -80,19 +83,21 @@ public sealed class PortalRenderer
     /// </summary>
     public void Render(Camera viewer, int levels)
     {
+        int wanted = Plan(viewer, levels, out _);
+        RenderPlanned(viewer, wanted);
+    }
+
+    internal void RenderPlanned(Camera viewer, int levels)
+    {
+        // Подписка нужна и root без когда-либо созданных камер: main callback
+        // обязан восстановить fallback после чужого borrowed binding.
+        if (_portal != null && _portal.screen != null && viewer != null) Subscribe();
         if (_portal.exitPortal == null || _portal.screen == null || viewer == null || levels < 1)
         {
             Suspend();
             return;
         }
 
-        if (!IsVisible(viewer))
-        {
-            Suspend();
-            return;
-        }
-
-        Subscribe();
         EnsureCapacity(levels, viewer);
         _active = true;
         for (int level = 0; level < _cameras.Length; level++)
@@ -186,10 +191,8 @@ public sealed class PortalRenderer
             _rendered[i] = false;
         }
 
-        // Привязки текстур намеренно остаются как были. Таргеты при приостановке
-        // живы, отвязывать их незачем, а обнуление дало бы чёрную вспышку в тот
-        // кадр, когда портал вернётся в поле зрения. Снимает привязки только
-        // Release, вместе с самими таргетами.
+        // Borrowed binding нельзя менять посреди чужого virtual view.
+        // Собственный main callback покажет fallback и снимет устаревшую глубину.
     }
 
     /// <summary>
@@ -324,23 +327,27 @@ public sealed class PortalRenderer
     /// </summary>
     private void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
     {
-        if (_portal == null || _portal.exitPortal == null || _cameras.Length == 0)
+        if (_portal == null)
         {
             return;
         }
+
+        // Эта ветка работает даже до первой аллокации и не выдаёт старый RT
+        // за текущий кадр, если root не получил бюджет.
+        if (ReferenceEquals(camera, _portal.playerCamera))
+        {
+            bool ready = _active && _levels > 0 && _targets.Length > 0 && _targets[0] != null;
+            _portal.SetViewTexture(ready ? _targets[0] : null);
+            _portal.SetContentBuffers(ready ? _contentDepth : null,
+                ready ? ContentInverseProjection : Matrix4x4.identity);
+            return;
+        }
+        if (!_active || _portal.exitPortal == null || _cameras.Length == 0) return;
 
         // Между отпиской и последним вызовом события таргеты могли уже уйти
         // на уничтожение: обращаться к ним в этот кадр нельзя.
         if (_targets.Length == 0 || _targets[0] == null)
         {
-            return;
-        }
-
-        // Наблюдатель рисуется последним, поэтому свой вид портал возвращает себе
-        // здесь, после того как все уровни уже посчитаны.
-        if (ReferenceEquals(camera, _portal.playerCamera))
-        {
-            _portal.SetViewTexture(_targets[0]);            _portal.SetContentBuffers(_contentDepth, ContentInverseProjection);
             return;
         }
 
@@ -407,24 +414,125 @@ public sealed class PortalRenderer
     }
 
     /// <summary>
-    /// Портал не виден, если смотрит от наблюдателя или его проём вне пирамиды
-    /// видимости. Второе проверяется по границам квада, а не по корню портала:
-    /// корень лежит в плоскости проёма и уходит из пирамиды раньше, чем сам проём.
+    /// Считает полезный prefix без камер, RT и изменения render projection.
     /// </summary>
-    private bool IsVisible(Camera viewer)
+    internal int Plan(Camera viewer, int ceiling, out float rootCoverage)
     {
-        if (!_portal.cullWhenOffscreen)
+        rootCoverage = 0;
+        if (viewer == null || _portal == null || _portal.exitPortal == null || _portal.screen == null || ceiling < 1)
+            return 0;
+        rootCoverage = 1;
+        if (!_portal.cullWhenOffscreen) return ceiling;
+        if (!Drawable(_portal, viewer)) { rootCoverage = 0; return 0; }
+        // Смещённый root нельзя отсекать по неподвижной физической плоскости.
+        if (Displaced(_portal)) return ceiling;
+        if (UncertainView(viewer) || UncertainScreen(_portal))
         {
-            return true;
+            // Совместимый root-only путь для TAA/custom/upscalers. Он сохраняет прежнее
+            // отсечение корней, а не включает все roots из-за неопределённого child-prefix.
+            // Только этот путь использует screen.bounds; optimized path ниже — физический.
+            bool visible = PortalMath.SignedDistance(_portal.transform, viewer.transform.position) > 0f;
+            if (visible)
+            {
+                GeometryUtility.CalculateFrustumPlanes(viewer, _rootPlanes);
+                visible = GeometryUtility.TestPlanesAABB(_rootPlanes, _portal.screen.bounds);
+            }
+            if (!visible) rootCoverage = 0;
+            return visible ? ceiling : 0;
         }
 
-        if (PortalMath.SignedDistance(_portal.transform, viewer.transform.position) <= 0f)
+        if (RootBeyondFarPlane(viewer)) { rootCoverage = 0; return 0; }
+        Matrix4x4 projection = Matrix4x4.Perspective(viewer.fieldOfView, viewer.aspect,
+            viewer.nearClipPlane, viewer.farClipPlane);
+        PortalVisibility.Coverage parent = Project(_portal, viewer.transform.position,
+            projection * viewer.worldToCameraMatrix, viewer.nearClipPlane, viewer);
+        if (parent.IsEmpty) { rootCoverage = 0; return 0; }
+        if (parent.IsUncertain) return ceiling;
+        rootCoverage = parent.Bounds.width * parent.Bounds.height;
+        // Сдвиг child сохраняет prefix только уже видимого root.
+        if (Drawable(_portal.exitPortal, viewer) && UncertainScreen(_portal.exitPortal)) return ceiling;
+        float near = Mathf.Min(viewer.nearClipPlane, MinimumNearClip);
+        Matrix4x4 virtualProjection = Matrix4x4.Perspective(viewer.fieldOfView, viewer.aspect, near, viewer.farClipPlane);
+        Matrix4x4 step = PortalMath.EntranceToExit(_portal.transform, _portal.exitPortal.transform);
+        Matrix4x4 pose = viewer.transform.localToWorldMatrix;
+        for (int requested = 1; requested < ceiling; requested++)
         {
-            return false;
+            pose = step * pose;
+            Matrix4x4 view = Matrix4x4.Scale(new Vector3(1, 1, -1))
+                * Matrix4x4.TRS(pose.GetColumn(3), pose.rotation, Vector3.one).inverse;
+            Matrix4x4 vp = virtualProjection * view;
+            PortalVisibility.Coverage own = Project(_portal, pose.GetColumn(3), vp, near, viewer);
+            PortalVisibility.Coverage exit = Project(_portal.exitPortal, pose.GetColumn(3), vp, near, viewer);
+            if (own.IsUncertain || exit.IsUncertain) return ceiling;
+            parent = PortalVisibility.IntersectConsumers(parent, own, exit);
+            if (parent.IsEmpty) return requested;
         }
+        return ceiling;
+    }
 
-        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(viewer);
-        return GeometryUtility.TestPlanesAABB(planes, _portal.screen.bounds);
+    private PortalVisibility.Coverage Project(Portal portal, Vector3 eye, Matrix4x4 vp, float near, Camera viewer)
+    {
+        if (!Drawable(portal, viewer)) return PortalVisibility.Coverage.Empty;
+        return PortalVisibility.ProjectAperture(portal.transform.localToWorldMatrix, portal.OpeningSize,
+            vp, eye, near, UncertainScreen(portal), _clipFirst, _clipSecond);
+    }
+
+    private bool RootBeyondFarPlane(Camera viewer)
+    {
+        // Минимум глубины четырёх физических углов; child oblique Z здесь не участвует.
+        Matrix4x4 physical = _portal.transform.localToWorldMatrix;
+        Vector2 size = _portal.OpeningSize;
+        Vector3 center = physical.GetColumn(3), forward = viewer.transform.forward;
+        float minimum = Vector3.Dot(forward, center - viewer.transform.position)
+            - Mathf.Abs(Vector3.Dot(forward, physical.GetColumn(0))) * size.x * 0.5f
+            - Mathf.Abs(Vector3.Dot(forward, physical.GetColumn(1))) * size.y * 0.5f;
+        float margin = 1e-5f * Mathf.Max(Mathf.Max(1, viewer.farClipPlane),
+            Mathf.Max(center.magnitude, viewer.transform.position.magnitude));
+        return !float.IsNaN(minimum) && !float.IsInfinity(minimum) && minimum > viewer.farClipPlane + margin;
+    }
+
+    private static bool Drawable(Portal portal, Camera viewer) => portal != null && portal.screen != null
+        && portal.screen.enabled && portal.screen.gameObject.activeInHierarchy && !portal.screen.forceRenderingOff
+        && (viewer.cullingMask & (1 << portal.screen.gameObject.layer)) != 0;
+
+    private static bool Displaced(Portal portal)
+    {
+        Vector3 position = portal.screen.transform.localPosition;
+        return position.x != 0 || position.y != 0 || position.z != 0;
+    }
+
+    private static bool UncertainScreen(Portal portal)
+    {
+        Transform screen = portal.screen.transform;
+        Vector3 position = screen.localPosition, scale = screen.localScale;
+        return position.x != 0 || position.y != 0 || position.z != 0
+            || Quaternion.Angle(screen.localRotation, Quaternion.identity) > 1e-5f
+            || scale.x <= 0 || scale.y <= 0 || portal.screen.sharedMaterial == null
+            || portal.screen.sharedMaterial.shader == null
+            || portal.screen.sharedMaterial.shader.name != "Portals/PortalScreen";
+    }
+
+    private static bool UncertainView(Camera viewer)
+    {
+        // В первой версии не предполагаем размер jitter или правила стороннего upscaler.
+        // Неподдержанный вид сохраняет весь prefix, не меняя AA и качество.
+        if (viewer.orthographic || viewer.stereoEnabled || viewer.usePhysicalProperties || viewer.allowDynamicResolution
+            || viewer.transform.lossyScale != Vector3.one) return true;
+        if (viewer.TryGetComponent(out HDAdditionalCameraData data)
+            && (data.antialiasing != HDAdditionalCameraData.AntialiasingMode.None || data.allowDynamicResolution)) return true;
+        Matrix4x4 projection = Matrix4x4.Perspective(viewer.fieldOfView, viewer.aspect,
+            viewer.nearClipPlane, viewer.farClipPlane);
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(1, 1, -1))
+            * Matrix4x4.TRS(viewer.transform.position, viewer.transform.rotation, Vector3.one).inverse;
+        return !Matches(viewer.projectionMatrix, projection) || !Matches(viewer.worldToCameraMatrix, view);
+    }
+
+    private static bool Matches(Matrix4x4 a, Matrix4x4 b)
+    {
+        if (!IsFinite(a) || !IsFinite(b)) return false;
+        // Даже малый custom shift может открыть край: tolerance не доказывает эквивалентность view.
+        for (int i = 0; i < 16; i++) if (a[i] != b[i]) return false;
+        return true;
     }
 
     private void EnsureCapacity(int levels, Camera viewer)

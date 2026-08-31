@@ -73,11 +73,12 @@ namespace Portals.Lab.Tests
                 Set(context, name, Activator.CreateInstance(type.GetField(name, Members).FieldType));
         }
 
-        private void ParityFixture()
+        private void ParityFixture(bool recursive = false)
         {
             main.transform.SetPositionAndRotation(new Vector3(0, 0, 2), Quaternion.Euler(0, 180, 0));
             portal = CreatePortal("ProbePortal", Vector3.zero);
             paired = CreatePortal("PairedExit", new Vector3(40, 0, 0));
+            if (recursive) paired.transform.SetPositionAndRotation(new Vector3(0, 0, 4), Quaternion.Euler(0, 180, 0));
             Set(portal, "exitPortal", paired);
             Set(paired, "exitPortal", portal);
             portal.gameObject.SetActive(true);
@@ -299,7 +300,8 @@ namespace Portals.Lab.Tests
         [TestCase(true)]
         public void PairedOffscreenExitDoesNotInvalidateTheEntranceBinding(bool previouslyAllocated)
         {
-            ParityFixture();
+            // Borrowed binding проверяется на действительно видимой рекурсии.
+            ParityFixture(true);
             ContextPortals(portal, paired);
             if (previouslyAllocated)
             {

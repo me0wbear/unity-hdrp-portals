@@ -25,6 +25,10 @@ public sealed class PortalSystem : MonoBehaviour
         new Dictionary<Portal, PortalRenderer>();
 
     private static PortalSystem _instance;
+    private int[] _wanted = System.Array.Empty<int>();
+    private int[] _allocated = System.Array.Empty<int>();
+    private int[] _priorityOrder = System.Array.Empty<int>();
+    private float[] _coverage = System.Array.Empty<float>();
 
     // Якорь Volume, которым модуль переводит грейдинг на сторону назначения.
     private static Transform _volumeAnchor;
@@ -140,7 +144,33 @@ public sealed class PortalSystem : MonoBehaviour
 
     private void LateUpdate()
     {
-        int spent = 0;
+        int count = Portals.Count;
+        if (_wanted.Length < count)
+        {
+            int capacity = Mathf.Max(count, _wanted.Length * 2);
+            _wanted = new int[capacity];
+            _allocated = new int[capacity];
+            _priorityOrder = new int[capacity];
+            _coverage = new float[capacity];
+        }
+        // Сначала Fit всех screen: план первого root должен видеть уже
+        // актуальное смещение второго consumer, а не его состояние прошлого кадра.
+        for (int i = 0; i < count; i++)
+        {
+            Portal portal = Portals[i];
+            if (portal != null) PortalAperture.Fit(portal, portal.playerCamera);
+        }
+        for (int i = 0; i < count; i++)
+        {
+            _wanted[i] = 0; _coverage[i] = 0;
+            Portal portal = Portals[i];
+            if (portal == null || !Renderers.TryGetValue(portal, out PortalRenderer renderer)) continue;
+            int ceiling = portal.recursionDepth == int.MaxValue ? int.MaxValue : Mathf.Max(1, portal.recursionDepth + 1);
+            // Даже полностью видимая цепочка не может получить больше общего бюджета.
+            ceiling = Mathf.Min(ceiling, Mathf.Max(0, Budget));
+            _wanted[i] = renderer.Plan(portal.playerCamera, ceiling, out _coverage[i]);
+        }
+        PortalBudget.AllocateVisibleLevels(_wanted, _coverage, count, Budget, _allocated, _priorityOrder);
 
         Portal blendPortal = null;
         float blendWeight = 0f;
@@ -148,7 +178,7 @@ public sealed class PortalSystem : MonoBehaviour
         for (int i = 0; i < Portals.Count; i++)
         {
             Portal portal = Portals[i];
-            if (portal == null || portal.playerCamera == null)
+            if (portal == null)
             {
                 continue;
             }
@@ -158,15 +188,7 @@ public sealed class PortalSystem : MonoBehaviour
                 continue;
             }
 
-            PortalAperture.Fit(portal, portal.playerCamera);
-
-            // Бюджет режет глубину рекурсии, а не сами порталы: лучше показать
-            // все проёмы мельче, чем часть проёмов чёрными.
-            int wanted = Mathf.Max(1, portal.recursionDepth + 1);
-            int allowed = Mathf.Clamp(Budget - spent, 0, wanted);
-
-            renderer.Render(portal.playerCamera, allowed);
-            spent += renderer.LevelCount;
+            renderer.RenderPlanned(portal.playerCamera, _allocated[i]);
 
             // Тянуть грейдинг может только портал, который сейчас рисуется для
             // этой камеры. Стоящий за спиной или вне поля зрения не показывает
