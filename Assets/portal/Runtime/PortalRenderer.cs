@@ -137,9 +137,22 @@ public sealed class PortalRenderer
 
             if (level == 0)
             {
-                // AOV содержит аппаратную глубину: диапазон Z и направление Y
-                // должны совпадать с проекцией, использованной при рендере в RT.
+                // Буфер глубины содержимого хранит аппаратную глубину: диапазон Z
+                // и направление Y должны совпадать с проекцией, использованной
+                // при рендере в RT.
                 ContentInverseProjection = GL.GetGPUProjectionMatrix(camera.projectionMatrix, true).inverse;
+            }
+
+            // Уровень глубже рисовать имеет смысл, только если из этой камеры
+            // виден хотя бы один квад, на котором появится его результат. При
+            // рабочем косом отсечении квад выхода срезан самой проекцией, а квад
+            // входа попадает в кадр, лишь когда пара стоит лицом к лицу. Если не
+            // виден ни один, рекурсия заканчивается здесь: более глубокие камеры
+            // выключаются и бюджета системы не занимают, хотя сцена этого уровня
+            // без них не отличается ни одним пикселем.
+            if (_portal.cullWhenOffscreen && level + 1 < _levels && !DeeperLevelVisible(camera))
+            {
+                _levels = level + 1;
             }
         }
     }
@@ -427,6 +440,47 @@ public sealed class PortalRenderer
         return GeometryUtility.TestPlanesAABB(planes, _portal.screen.bounds);
     }
 
+    /// <summary>
+    /// Буфер плоскостей пирамиды видимости для проверки уровней. Один на рендер
+    /// и переиспользуется, чтобы не выделять массив на каждый уровень каждый кадр.
+    /// </summary>
+    private readonly Plane[] _levelPlanes = new Plane[6];
+
+    /// <summary>
+    /// Виден ли из камеры уровня хотя бы один квад, на котором появится
+    /// результат более глубокого уровня. Содержимое следующего уровня кладётся
+    /// на квады обоих порталов пары (см. <see cref="OnBeginCameraRendering"/>),
+    /// поэтому проверяются оба.
+    /// </summary>
+    private bool DeeperLevelVisible(Camera levelCamera)
+    {
+        GeometryUtility.CalculateFrustumPlanes(levelCamera, _levelPlanes);
+
+        return QuadVisible(_portal, levelCamera, _levelPlanes)
+            || QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes);
+    }
+
+    /// <summary>
+    /// Квад портала стоит лицом к камере уровня и попадает в её пирамиду
+    /// видимости. Пирамида считается по текущей матрице проекции, то есть с
+    /// косой ближней плоскостью: квад выхода, срезанный ею, отсеивается здесь
+    /// сам, а вблизи перехода, когда косое отсечение выключено, остаётся видимым.
+    /// </summary>
+    private static bool QuadVisible(Portal portal, Camera levelCamera, Plane[] planes)
+    {
+        if (portal == null || portal.screen == null)
+        {
+            return false;
+        }
+
+        if (PortalMath.SignedDistance(portal.transform, levelCamera.transform.position) <= 0f)
+        {
+            return false;
+        }
+
+        return GeometryUtility.TestPlanesAABB(planes, portal.screen.bounds);
+    }
+
     private void EnsureCapacity(int levels, Camera viewer)
     {
         int width = Mathf.Max(1, viewer.pixelWidth / _portal.resolutionDivider);
@@ -471,10 +525,11 @@ public sealed class PortalRenderer
     }
 
     /// <summary>
-    /// Просит у пайплайна глубину и векторы движения нулевого уровня. Это
-    /// единственный публичный способ получить промежуточные буферы кадра, а не
-    /// только итоговую картинку: пайплайн сам скопирует их в выданные здесь
-    /// текстуры в конце своего кадра.
+    /// Готовит текстуру глубины содержимого и подписывает нулевой уровень на её
+    /// заполнение. Глубина снимается копией с уже посчитанного кадра виртуальной
+    /// камеры проходом <see cref="PortalContentDepthCopyPass"/>. Запрос AOV для
+    /// этого не годится: HDRP выполняет для каждого запроса AOV отдельный полный
+    /// рендер камеры, то есть сцена нулевого уровня считалась бы дважды за кадр.
     /// </summary>
     private void RequestContentBuffers(int width, int height)
     {
@@ -492,20 +547,7 @@ public sealed class PortalRenderer
             width, height, GraphicsFormat.R32_SFloat, _portal.name + "_ContentDepth");
         _contentDepth = RTHandles.Alloc(_contentDepthTexture);
 
-        if (!_cameras[0].TryGetComponent(out HDAdditionalCameraData data))
-        {
-            return;
-        }
-
-        var builder = new AOVRequestBuilder();
-        builder.Add(
-            AOVRequest.NewDefault(),
-            AllocateContentBuffer,
-            null,
-            new[] { AOVBuffers.DepthStencil },
-            (cmd, buffers, properties) => { });
-
-        data.SetAOVRequests(builder.Build());
+        PortalContentDepthCopyPass.Register(_cameras[0], _contentDepth);
     }
 
     private static RenderTexture CreateContentTexture(
@@ -542,23 +584,11 @@ public sealed class PortalRenderer
         }
     }
 
-    private RTHandle AllocateContentBuffer(AOVBuffers bufferId)
-    {
-        switch (bufferId)
-        {
-            case AOVBuffers.DepthStencil:
-                return _contentDepth;            default:
-                return null;
-        }
-    }
-
     private void ReleaseContentBuffers()
     {
-        if (_cameras.Length > 0
-            && _cameras[0] != null
-            && _cameras[0].TryGetComponent(out HDAdditionalCameraData data))
+        if (_cameras.Length > 0 && _cameras[0] != null)
         {
-            data.SetAOVRequests(null);
+            PortalContentDepthCopyPass.Unregister(_cameras[0]);
         }
 
         ReleaseContentTexture(ref _contentDepth, ref _contentDepthTexture);
@@ -615,6 +645,22 @@ public sealed class PortalRenderer
         // камеры занимается шейдер квада: два независимых автоматических
         // экспонирования разошлись бы, и проём отличался бы яркостью от окружения.
         Override(data, FrameSettingsField.ExposureControl, false);
+
+        // Экранные эффекты, читающие глубину, по умолчанию выключены. Проекция
+        // виртуальной камеры косая, а HDRP линеаризует глубину для них через
+        // LinearEyeDepth, которая косую проекцию не поддерживает: точки
+        // восстанавливаются на неверных расстояниях, затенение ложится грязью в
+        // стыки поверхностей, и вид в проёме отличается от вида после перехода.
+        // Поле портала возвращает эффекты осознанно; применяется при создании
+        // камер, как и writeContentDepth.
+        if (!_portal.screenSpaceEffectsInView)
+        {
+            Override(data, FrameSettingsField.SSAO, false);
+            Override(data, FrameSettingsField.SSR, false);
+            Override(data, FrameSettingsField.TransparentSSR, false);
+            Override(data, FrameSettingsField.SSGI, false);
+            Override(data, FrameSettingsField.ContactShadows, false);
+        }
 
         CopyLens(viewer, camera);
         return camera;
