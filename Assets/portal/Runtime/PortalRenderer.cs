@@ -132,15 +132,35 @@ public sealed class PortalRenderer
             2f / Mathf.Max(viewer.pixelWidth, 1),
             2f / Mathf.Max(viewer.pixelHeight, 1));
 
+        // Минимальный вьюпорт уровня. Совсем узкая область на скользящем
+        // ракурсе выродила бы вычислительные проходы пайплайна в нулевые
+        // группы потоков; шестнадцать пикселей держат их живыми при любом
+        // делителе разрешения.
+        Vector2 minimumViewport = new Vector2(
+            16f * _portal.resolutionDivider / Mathf.Max(viewer.pixelWidth, 1),
+            16f * _portal.resolutionDivider / Mathf.Max(viewer.pixelHeight, 1));
+
         // Нулевой уровень рисует область кадра, которую занимает проём в кадре
         // наблюдателя. Каждый следующий уровень — след вложенного квада внутри
-        // области своего родителя.
-        Vector4 rect = _portal.restrictViewToOpening
-            ? QuadRect(
-                viewer.nonJitteredProjectionMatrix * viewer.worldToCameraMatrix,
-                _portal.screen.transform,
-                padding)
-            : FullRect;
+        // области своего родителя. След вне кадра у нулевого уровня возможен:
+        // верхний тест видимости идёт по толстым границам квада и пропускает
+        // ракурсы мимо угла экрана. Резать нулевой уровень по этому признаку не
+        // наше дело — безопасный откат на полный кадр повторяет прежнее
+        // поведение.
+        Vector4 rect = FullRect;
+        if (_portal.restrictViewToOpening)
+        {
+            if (!TryQuadRect(
+                    viewer.nonJitteredProjectionMatrix * viewer.worldToCameraMatrix,
+                    _portal.screen.transform,
+                    padding,
+                    out rect))
+            {
+                rect = FullRect;
+            }
+
+            rect = EnsureMinimumViewport(rect, minimumViewport);
+        }
 
         for (int level = 0; level < _cameras.Length; level++)
         {
@@ -209,7 +229,9 @@ public sealed class PortalRenderer
             {
                 if (TryDeeperRect(camera, fullProjection, rect, padding, out Vector4 deeper))
                 {
-                    rect = _portal.restrictViewToOpening ? deeper : FullRect;
+                    rect = _portal.restrictViewToOpening
+                        ? EnsureMinimumViewport(deeper, minimumViewport)
+                        : FullRect;
                 }
                 else if (_portal.cullWhenOffscreen)
                 {
@@ -544,17 +566,18 @@ public sealed class PortalRenderer
         Matrix4x4 viewProjection = fullProjection * levelCamera.worldToCameraMatrix;
 
         bool found = false;
-        if (QuadVisible(_portal, levelCamera, _levelPlanes))
+        if (QuadVisible(_portal, levelCamera, _levelPlanes)
+            && TryQuadRect(viewProjection, _portal.screen.transform, padding, out Vector4 own))
         {
-            rect = QuadRect(viewProjection, _portal.screen.transform, padding);
+            rect = own;
             found = true;
         }
 
         if (_portal.exitPortal != null
-            && QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes))
+            && QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes)
+            && TryQuadRect(
+                viewProjection, _portal.exitPortal.screen.transform, padding, out Vector4 exitRect))
         {
-            Vector4 exitRect = QuadRect(
-                viewProjection, _portal.exitPortal.screen.transform, padding);
             rect = found ? UnionRects(rect, exitRect) : exitRect;
             found = true;
         }
@@ -574,8 +597,13 @@ public sealed class PortalRenderer
     /// делает след полным кадром: спроецировать его нельзя, а ошибиться в
     /// тесную сторону значило бы срезать видимое. Так происходит вплотную к
     /// переходу, и ограничение области там само отключается.
+    ///
+    /// Ложь означает, что все углы спроецировались, но след с кадром не
+    /// пересёкся: квад прошёл мимо экрана. Проекция углов точнее теста по
+    /// толстым границам, поэтому это надёжный признак невидимости.
     /// </summary>
-    private static Vector4 QuadRect(Matrix4x4 viewProjection, Transform quad, Vector2 padding)
+    private static bool TryQuadRect(
+        Matrix4x4 viewProjection, Transform quad, Vector2 padding, out Vector4 rect)
     {
         Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
         Vector2 max = new Vector2(float.MinValue, float.MinValue);
@@ -592,7 +620,8 @@ public sealed class PortalRenderer
 
             if (clip.w <= 1e-4f)
             {
-                return FullRect;
+                rect = FullRect;
+                return true;
             }
 
             Vector2 point = new Vector2(
@@ -605,7 +634,28 @@ public sealed class PortalRenderer
 
         min = Vector2.Max(min - padding, Vector2.zero);
         max = Vector2.Min(max + padding, Vector2.one);
-        return new Vector4(min.x, min.y, max.x - min.x, max.y - min.y);
+        rect = new Vector4(min.x, min.y, max.x - min.x, max.y - min.y);
+        return rect.z > 0f && rect.w > 0f;
+    }
+
+    /// <summary>
+    /// Не даёт области уровня стать уже минимума: расширяет её вокруг центра,
+    /// не выходя за кадр. Вьюпорт в несколько пикселей выродил бы
+    /// вычислительные проходы пайплайна в нулевые группы потоков.
+    /// </summary>
+    private static Vector4 EnsureMinimumViewport(Vector4 rect, Vector2 minimum)
+    {
+        minimum = Vector2.Min(minimum, Vector2.one);
+        if (rect.z >= minimum.x && rect.w >= minimum.y)
+        {
+            return rect;
+        }
+
+        float width = Mathf.Max(rect.z, minimum.x);
+        float height = Mathf.Max(rect.w, minimum.y);
+        float x = Mathf.Clamp(rect.x + (rect.z - width) * 0.5f, 0f, 1f - width);
+        float y = Mathf.Clamp(rect.y + (rect.w - height) * 0.5f, 0f, 1f - height);
+        return new Vector4(x, y, width, height);
     }
 
     private static Vector4 UnionRects(Vector4 a, Vector4 b)
@@ -919,13 +969,7 @@ public sealed class PortalRenderer
         camera.ResetProjectionMatrix();
 
         Matrix4x4 fullProjection = camera.projectionMatrix;
-
-        // Сужение до области проёма идёт до косого отсечения: CalculateObliqueMatrix
-        // читает текущую матрицу камеры, поэтому суженная назначается ей сразу.
-        // Для полного кадра сужение вырождается в тождество, и путь один на оба
-        // режима.
-        Matrix4x4 projection = RestrictProjection(fullProjection, rect);
-        camera.projectionMatrix = projection;
+        Matrix4x4 projection = fullProjection;
 
         if (obliqueUsable)
         {
@@ -940,6 +984,14 @@ public sealed class PortalRenderer
                 projection = oblique;
             }
         }
+
+        // Сужение до области проёма идёт поверх косой матрицы, а не до неё:
+        // CalculateObliqueMatrix проверена только на полной симметричной
+        // проекции камеры, и подсовывать ей смещённую значило бы менять
+        // отсечение на крайних ракурсах. Сужение переписывает лишь строки X и Y,
+        // косую строку глубины оно не трогает; для полного кадра вырождается в
+        // тождество, и путь один на оба режима.
+        projection = RestrictProjection(projection, rect);
 
         // Матрица без дрожания сообщается отдельно и до того, как дрожание
         // добавлено. Векторы движения считаются по разнице матриц соседних
