@@ -39,6 +39,7 @@ namespace Portals.Lab.Validation
     public sealed class PortalVisibilityMatchedEvidence
     {
         public int schemaVersion = 2;
+        public bool regularAoHistoryReinitialized;
         public PortalVisibilitySample[] samples;
         public PortalVisibilityTriple[] triples;
         public PortalImageDifference aShallow, bShallow, parentedPositive;

@@ -302,6 +302,34 @@ public sealed class PortalSchedulingTests
         Assert.That(Planner(Renderers[a])(viewer, 1, out _), Is.EqualTo(expected));
     }
 
+    [Test]
+    public void StockHdrpResetRetainsRegularAoHistoryUntilOwnerReleasesIt()
+    {
+        // Контроль установленного HDRP для воспроизводимости лабораторных кадров.
+        Type hdType = FindType("UnityEngine.Rendering.HighDefinition.HDCamera");
+        object hd = hdType.GetMethod("GetOrCreate", BindingFlags.Public | BindingFlags.Static)
+            .Invoke(null, new object[] { viewer, 0 });
+        int ao = Convert.ToInt32(Enum.Parse(FindType("UnityEngine.Rendering.HighDefinition.HDCameraFrameHistoryType"),
+            "AmbientOcclusion"));
+        MethodInfo allocate = hdType.GetMethod("AllocateAmbientOcclusionHistoryBuffer", Hidden);
+        MethodInfo release = hdType.GetMethod("ReleaseHistoryFrameRT", Hidden, null, new[]{typeof(int)}, null);
+        MethodInfo current = hdType.GetMethod("GetCurrentFrameRT");
+        MethodInfo previous = hdType.GetMethod("GetPreviousFrameRT");
+        try
+        {
+            allocate.Invoke(hd, new object[] { 0.5f });
+            object before = current.Invoke(hd, new object[] { ao });
+            Assert.That(before, Is.Not.Null);
+            hdType.GetMethod("Reset").Invoke(hd, null);
+            Assert.That(current.Invoke(hd, new object[] { ao }), Is.SameAs(before),
+                "A reset history counter alone does not initialize the regular AO buffer.");
+            release.Invoke(hd, new object[] { ao });
+            Assert.That(current.Invoke(hd, new object[] { ao }), Is.Null);
+            Assert.That(previous.Invoke(hd, new object[] { ao }), Is.Null);
+        }
+        finally { release.Invoke(hd, new object[] { ao }); }
+    }
+
     [TestCase(0, 1)]
     [TestCase(1, 2)]
     [TestCase(2, 3)]

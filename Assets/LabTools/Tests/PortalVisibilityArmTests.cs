@@ -92,5 +92,15 @@ namespace Portals.Lab.Tests
             Call("OnCameraEnd", default(ScriptableRenderContext), mainHost.GetComponent<Camera>());
             Assert.That(Completed(), Is.EqualTo(1));
         }
+
+        [TestCase("6000.5.9f1", "17.5.0", true)]
+        [TestCase("6000.5.9f2", "17.5.0", false)]
+        [TestCase("6000.5.9f1", "17.4.0", false)]
+        [TestCase(null, "17.5.0", false)]
+        public void RegularAoPreparationRequiresPinnedOwnerApi(string unity, string hdrp, bool expected)
+        {
+            MethodInfo method = probe.GetType().GetMethod("SupportsAoPreparation", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That((bool)method.Invoke(null, new object[]{unity, hdrp}), Is.EqualTo(expected));
+        }
     }
 }

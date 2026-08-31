@@ -295,6 +295,18 @@ Blocked; нарушения наблюдаемых lifecycle-инвариант�
 Архивные 15-capture файлы и исходный policy Evaluate не изменяются.
 Editor tests не заменяют этот actual Player-контроль.
 
+Диагностика начальной AO history: `tools/check.sh Visibility VISIBILITY_REINITIALIZE_AO_HISTORY=1`.
+Для Unity 6000.5.9f1/HDRP 17.5.0 штатный HDCamera.Reset сохраняет regular AO buffers.
+Контроль вызывает точный метод ReleaseHistoryFrameRT(int) у владельца HDCamera
+только перед независимыми arms, затем обычный SSAO сам инициализирует историю.
+Заимствованные RTHandle напрямую не освобождаются, AOV histories не изменяются.
+Внутри hide/reentry/starvation нет дополнительного сброса, эффекты и пороги прежние.
+Файлы `regular-ao-history-control.txt` и `regular-ao-history-preparation.json`
+показывают режим, IDs текущей/предыдущей history перед освобождением и результат
+свежих запросов после него. Обычная последовательность Reset не меняется и не
+повторяется дополнительно. Это отдельный эксперимент, не production-исправление.
+Без аргумента остаётся штатный Reset; неизвестная версия/API даёт Blocked.
+
 Для legacy build-only используйте `PortalVisibilityCheckBuilder.BuildLegacy`,
 без `PORTAL_CHECK_NAME`, с `PORTAL_LEGACY_CHECK=Rotate|Cross|Ghost` и абсолютным
 `PORTAL_LEGACY_OUTPUT`. Builder собирает сохранённую сцену и не вызывает её

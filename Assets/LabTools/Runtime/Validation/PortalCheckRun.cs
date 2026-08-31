@@ -21,6 +21,7 @@ namespace Portals.Lab.Validation
 
         public static PortalCheckRun Current { get; private set; }
         public string OutputDirectory => identity.outputDirectory;
+        public string HdrpVersion => identity?.hdrpVersion;
         public bool IsCompleted => session != null && session.Completed;
 
         public void SetBuildIdentity(PortalCheckIdentity embedded) => identity = embedded;

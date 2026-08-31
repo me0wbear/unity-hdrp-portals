@@ -29,6 +29,20 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
     private Camera[] metadataCameras;
     private Color32[] captured;
     private int savedBudget;
+    private bool reinitializeRegularAo;
+    private int preparedArms;
+    [Serializable]
+    private sealed class AoPreparation
+    {
+        public int arm;
+        public string cameraId, currentBefore, previousBefore;
+        public bool currentClearedByOwner, previousClearedByOwner;
+    }
+    [Serializable]
+    private sealed class AoPreparations { public AoPreparation[] cameras; }
+    private readonly List<AoPreparation> aoPreparations = new List<AoPreparation>();
+    private static readonly MethodInfo ReleaseAoHistory = typeof(HDCamera).GetMethod("ReleaseHistoryFrameRT",
+        BindingFlags.Instance | BindingFlags.NonPublic, null, new[]{typeof(int)}, null);
     private static readonly FieldInfo HistoryFrame = typeof(HDCamera).GetField("cameraFrameCount", BindingFlags.Instance | BindingFlags.NonPublic);
 
     private IEnumerator Start()
@@ -43,6 +57,13 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
                 invalid = "Visibility static certification requires the unchanged Sandbox AA=None setting.";
             savedBudget = PortalSystem.Budget;
             if (HistoryFrame == null) invalid = "Installed HDRP history counter is unavailable.";
+            string aoControl = Environment.GetEnvironmentVariable("VISIBILITY_REINITIALIZE_AO_HISTORY");
+            reinitializeRegularAo = aoControl == "1";
+            if (!string.IsNullOrEmpty(aoControl) && aoControl != "0" && aoControl != "1")
+                invalid = "VISIBILITY_REINITIALIZE_AO_HISTORY must be 0 or 1.";
+            if (reinitializeRegularAo && !SupportsAoPreparation(Application.unityVersion, run.HdrpVersion))
+                invalid = "Regular AO preparation requires Unity 6000.5.9f1/HDRP 17.5.0 and the exact owner release method.";
+            evidence.regularAoHistoryReinitialized = reinitializeRegularAo;
         }
         catch (Exception error) { invalid = error.Message; }
         if (invalid != null) { Finish(new PortalCheckDecision("Blocked", invalid)); yield break; }
@@ -75,6 +96,9 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
             + "No manual history reset or disable/recreate inside hide/reentry or budget starvation.\n"
             + "Parented ordinary side-by-side: depth2 reference3/optimized1; Budget0 pixel-positive control.\n"
             + "Three runtime build-copy pair clones: budgets 0,3,1,4,0,3; expected [000],[111],[001],[112],[000],[111].\n");
+        context.Save("regular-ao-history-control.txt", reinitializeRegularAo
+            ? "Regular AO history is released through its HDCamera owner only at independent arm setup. AOV histories are not reset by this control. No intervention inside hide/reentry/starvation.\n"
+            : "Stock HDCamera.Reset only; regular AO buffers are not explicitly reinitialized.\n");
         foreach (Portal portal in context.Portals)
             if (portal != a && portal != b) portal.gameObject.SetActive(false);
         b.enabled = false;
@@ -141,6 +165,9 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
         yield return ParentedControl(pair);
         evidence.samples = samples.ToArray();
         evidence.triples = triples.ToArray();
+        if (reinitializeRegularAo)
+            context.Save("regular-ao-history-preparation.json", JsonUtility.ToJson(
+                new AoPreparations { cameras = aoPreparations.ToArray() }, true));
         context.Save("visibility-evidence.json", JsonUtility.ToJson(evidence, true));
         Finish(PortalVisibilityPolicy.EvaluateMatched(evidence, context.Problem));
     }
@@ -161,12 +188,51 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
         setupPose();
         HDCamera.GetOrCreate(context.Main, 0).Reset();
         PortalSystem.ResetHistory();
+        if (reinitializeRegularAo) PrepareRegularAoHistory(root);
         clock.BeginArm();
         renderedInArm.Clear();
         trackArmHistory = true;
         armResetPending = true;
         armResetValid = true;
         RememberCapacity();
+    }
+
+    private static bool SupportsAoPreparation(string unityVersion, string hdrpVersion) =>
+        unityVersion == "6000.5.9f1" && hdrpVersion == "17.5.0" && ReleaseAoHistory != null
+        && ReleaseAoHistory.ReturnType == typeof(void) && ReleaseAoHistory.DeclaringType == typeof(HDCamera);
+
+    private static string AoTargetId(RTHandle handle) =>
+        handle?.rt == null ? null : handle.rt.GetEntityId().ToString();
+
+    private void PrepareRegularAoHistory(Portal root)
+    {
+        // Только независимая подготовка LAB: обычный Reset не очищает regular AO.
+        // Release вызывается у владельца; заимствованные RTHandle здесь не освобождаются.
+        // К этому моменту HDRP уже восстановил regular history system после AOV.
+        preparedArms++;
+        var prepared = new List<Camera> { context.Main };
+        prepared.AddRange(root.GetComponentsInChildren<Camera>(true));
+        int ao = (int)HDCameraFrameHistoryType.AmbientOcclusion;
+        foreach (Camera camera in prepared)
+        {
+            HDCamera hd = HDCamera.GetOrCreate(camera, 0);
+            var row = new AoPreparation { arm = preparedArms, cameraId = camera.GetEntityId().ToString(),
+                currentBefore = AoTargetId(hd.GetCurrentFrameRT(ao)),
+                previousBefore = AoTargetId(hd.GetPreviousFrameRT(ao)) };
+            try { ReleaseAoHistory.Invoke(hd, new object[] { ao }); }
+            catch (Exception error)
+            {
+                context.Problem = "Regular AO owner preparation failed: " + error.GetBaseException().Message;
+                aoPreparations.Add(row);
+                return;
+            }
+            // После release запрашиваем состояние заново, не читаем освобождённый handle.
+            row.currentClearedByOwner = hd.GetCurrentFrameRT(ao) == null;
+            row.previousClearedByOwner = hd.GetPreviousFrameRT(ao) == null;
+            aoPreparations.Add(row);
+            if (!row.currentClearedByOwner || !row.previousClearedByOwner)
+                context.Problem = "Regular AO history is still present after owner preparation.";
+        }
     }
 
     private IEnumerator StaticTriple(Portal root, string prefix, Action setupPose,
