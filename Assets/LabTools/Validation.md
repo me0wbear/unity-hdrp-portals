@@ -196,6 +196,9 @@ Reader читает GetSample, не LastValue. Реальные CPU marker tests
 `*-native-aov.csv` сохраняет все прочитанные CPU scope counts в порядке поступления;
 native sample не отождествляется с script frame. CSV покадрового чтения содержит только
 последний новый counter sample, а median/p95 используют все новые native samples.
+Zero-execution gate учитывает всю прочитанную пачку CPU samples: ранний ненулевой
+или больший Count нельзя скрыть последним меньшим Count, даже если legacy sampler
+совпадает с последним. Такая пачка делает execution assertion unavailable.
 GPU recorder `HDRenderPipelineRenderAOV` использует GpuRecorder и ns→ms; его sample.Count
 также сохраняется. Это свежие arrivals после Reset/Start, не время текущего render frame.
 `read_frame` — кадр наблюдения; `gpu_source_frame=null`, исходный mode тоже неизвестен:

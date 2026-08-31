@@ -133,19 +133,9 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             row.draw = ReadFresh(draws, false, ref drawCursor, out row.drawCount, drawValues);
             row.setPass = ReadFresh(setPass, false, ref passCursor, out row.setPassCount, passValues);
             row.aovGpuMs = ReadFresh(aovGpu, true, ref gpuCursor, out row.aovGpuCount, aovValues);
-            int cpuBefore = cpuCursor;
-            ReadFresh(aovCpu, true, ref cpuCursor, out double? cpuCount, null);
-            for (int sampleIndex = Mathf.Max(0, cpuBefore); sampleIndex < cpuCursor; sampleIndex++)
-                nativeAovCounts.Add(aovCpu.GetSample(sampleIndex).Count);
-            if (cpuCursor < 0) { nativeAovCounts.Clear(); executionDisagreement = true; }
             int? samplerCount = aovSampler != null && aovSampler.isValid && aovSampler.enabled ? aovSampler.sampleBlockCount : (int?)null;
-            if (cpuCount.HasValue && samplerCount.HasValue && cpuCount.Value == samplerCount.Value)
-                row.aovExecutions = cpuCount;
-            else if (!cpuCount.HasValue && samplerCount == 0)
-                row.aovExecutions = 0;
-            else if (cpuCount.HasValue || samplerCount.GetValueOrDefault() > 0)
-                executionDisagreement = true;
-            row.cpuRecorderCount = cpuCount;
+            row.aovExecutions = ReadAovExecutions(aovCpu, ref cpuCursor, samplerCount,
+                nativeAovCounts, ref executionDisagreement, out row.cpuRecorderCount);
             row.cpuSamplerBlocks = samplerCount;
             Add(executions, row.aovExecutions);
             if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0
@@ -280,6 +270,29 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         }
         return latest;
     }
+    private static double? ReadAovExecutions(ProfilerRecorder recorder, ref int cursor, int? samplerCount,
+        List<long> nativeCounts, ref bool disagreement, out double? cpuCount)
+    {
+        int before = cursor;
+        ReadFresh(recorder, true, ref cursor, out cpuCount, null);
+        long maximum = 0;
+        for (int index = Mathf.Max(0, before); index < cursor; index++)
+        {
+            long count = recorder.GetSample(index).Count;
+            nativeCounts.Add(count);
+            maximum = Math.Max(maximum, count);
+        }
+        if (cursor < 0) { nativeCounts.Clear(); disagreement = true; return null; }
+        // Native flush может доставить несколько кадров за один script frame.
+        // Последний sample не должен скрывать более ранний ненулевой/больший Count.
+        if (maximum > cpuCount.GetValueOrDefault()) { disagreement = true; return null; }
+        if (cpuCount.HasValue && samplerCount.HasValue && cpuCount.Value == samplerCount.Value)
+            return cpuCount;
+        if (!cpuCount.HasValue && samplerCount == 0) return 0;
+        if (cpuCount.HasValue || samplerCount.GetValueOrDefault() > 0) disagreement = true;
+        return null;
+    }
+
     private string CounterSnapshot() => "supportsGpuRecorder=" + SystemInfo.supportsGpuRecorder + "\n"
         + "draw: " + CounterState(draws) + "\nsetPass: " + CounterState(setPass)
         + "\naovCpu: " + CounterState(aovCpu) + "\naovGpu: " + CounterState(aovGpu)

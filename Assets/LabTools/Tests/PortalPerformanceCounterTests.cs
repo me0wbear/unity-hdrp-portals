@@ -79,6 +79,52 @@ namespace Portals.Lab.Tests
         }
 
         [UnityTest]
+        public IEnumerator EarlierPositiveArrivalCannotBeHiddenByFinalZero()
+        {
+            string name = "PortalCounterBatch-" + Guid.NewGuid().ToString("N");
+            var marker = new ProfilerMarker(ProfilerCategory.Scripts, name);
+            var recorder = ProductionRecorder(name);
+            try
+            {
+                using (marker.Auto()) { }
+                for (int frame = 0; frame < 4; frame++) yield return null;
+                Assert.That(recorder.Count, Is.GreaterThanOrEqualTo(2), "Fixture требует несколько настоящих native arrivals.");
+                Assert.That(recorder.GetSample(0).Count, Is.EqualTo(1));
+                Assert.That(recorder.GetSample(recorder.Count - 1).Count, Is.Zero);
+                var nativeCounts = new List<long>();
+                object[] args = { recorder, 0, (int?)0, nativeCounts, false, null };
+                var method = LabSerializationTests.FindType("PortalPerformanceCheck").GetMethod("ReadAovExecutions", StaticPrivate);
+                var executions = (double?)method.Invoke(null, args);
+                Assert.That(nativeCounts, Does.Contain(1L), "Все arrivals должны сохраняться для аудита.");
+                Assert.That(executions, Is.Null, "Последний ноль не должен скрывать более раннее выполнение AOV.");
+                Assert.That((bool)args[4], Is.True, "Несогласованная пачка должна блокировать zero-execution claim.");
+            }
+            finally { recorder.Dispose(); }
+        }
+
+        [UnityTest]
+        public IEnumerator AllZeroArrivalsStillProvideZeroExecutionEvidence()
+        {
+            string name = "PortalCounterQuietBatch-" + Guid.NewGuid().ToString("N");
+            var marker = new ProfilerMarker(ProfilerCategory.Scripts, name);
+            var recorder = ProductionRecorder(name);
+            try
+            {
+                for (int frame = 0; frame < 4; frame++) yield return null;
+                Assert.That(recorder.Count, Is.GreaterThanOrEqualTo(2));
+                var nativeCounts = new List<long>();
+                object[] args = { recorder, 0, (int?)0, nativeCounts, false, null };
+                var method = LabSerializationTests.FindType("PortalPerformanceCheck").GetMethod("ReadAovExecutions", StaticPrivate);
+                var executions = (double?)method.Invoke(null, args);
+                Assert.That(nativeCounts, Is.Not.Empty);
+                Assert.That(nativeCounts, Is.All.Zero);
+                Assert.That(executions, Is.EqualTo(0));
+                Assert.That((bool)args[4], Is.False);
+            }
+            finally { recorder.Dispose(); }
+        }
+
+        [UnityTest]
         public IEnumerator ProductionRecorderRetainsFramesUntilConsumption()
         {
             string name = "PortalCounterRetention-" + Guid.NewGuid().ToString("N");
