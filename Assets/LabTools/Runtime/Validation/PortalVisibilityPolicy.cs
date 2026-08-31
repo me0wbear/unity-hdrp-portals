@@ -45,6 +45,16 @@ namespace Portals.Lab.Validation
         public PortalImageDifference aShallow, bShallow, parentedPositive;
     }
 
+    [Serializable]
+    public sealed class PortalVisibilityEdgeEvidence
+    {
+        public int schemaVersion = 3;
+        public bool edgeSweep, regularAoHistoryReinitialized;
+        public PortalVisibilitySample[] samples;
+        public PortalVisibilityTriple[] triples;
+        public PortalImageDifference[] positives;
+    }
+
     // Считает завершённые main renders, а не coroutine yields и разрывы Unity frame count.
     public sealed class PortalVisibilityRenderClock
     {
@@ -166,6 +176,68 @@ namespace Portals.Lab.Validation
                 if (!Exact(triple.referenceRepeat))
                 {
                     unresolved = unresolved ?? triple.name + ": reference repeat is nonexact; temporal/lifecycle cause remains unresolved.";
+                    continue;
+                }
+                if (!Exact(triple.optimizedVsR1) || !Exact(triple.optimizedVsR2))
+                    return Decision("Failed", triple.name + ": optimized pixels differ from repeatable full-prefix references.");
+            }
+            return unresolved == null ? Decision("Passed", string.Empty) : Decision("Blocked", unresolved);
+        }
+
+        public static readonly string[] EdgeModes = {
+            "edge-recursion-inside-reference-r1", "edge-recursion-inside-visible", "edge-recursion-inside-reference-r2", "edge-recursion-inside-shallow",
+            "edge-recursion-outside-reference-r1", "edge-recursion-outside-visible", "edge-recursion-outside-reference-r2", "edge-recursion-outside-shallow",
+            "edge-custom-viewport-reference-r1", "edge-custom-viewport-visible", "edge-custom-viewport-reference-r2", "edge-custom-viewport-no-view",
+            "edge-custom-far-reference-r1", "edge-custom-far-visible", "edge-custom-far-reference-r2", "edge-custom-far-no-view" };
+
+        // Отдельный контракт: edge sweep не добавляет captures к штатным тридцати.
+        public static PortalCheckDecision EvaluateEdges(PortalVisibilityEdgeEvidence evidence, string problem)
+        {
+            if (!string.IsNullOrEmpty(problem)) return Decision("Blocked", problem);
+            if (evidence == null || evidence.schemaVersion != 3 || !evidence.edgeSweep || !evidence.regularAoHistoryReinitialized)
+                return Decision("Blocked", "Edge Visibility requires the labeled edge sweep and regular AO history preparation.");
+            if (evidence.samples == null || evidence.samples.Length != EdgeModes.Length)
+                return Decision("Blocked", "Edge Visibility requires exactly sixteen named captures.");
+            int[] counts = { 3,3,3,1, 3,2,3,1, 3,1,3,0, 3,1,3,0 };
+            for (int i = 0; i < EdgeModes.Length; i++)
+            {
+                PortalVisibilitySample sample = evidence.samples[i];
+                if (sample == null || sample.mode != EdgeModes[i] || sample.virtualCallbacks == null
+                    || sample.virtualCallbacks.Length != 1)
+                    return Decision("Blocked", "Missing, duplicate, or out-of-order edge observation.");
+                if (sample.mainCallbacks != 1 || sample.virtualCallbacks[0] != counts[i]
+                    || !sample.bindingsValid || !sample.capacityValid || !sample.historyValid)
+                    return Decision("Failed", sample.mode + ": callback, binding, capacity, or history invariant failed.");
+                if (!sample.clockValid || sample.completedMainRenders != 40 || !ValidMetadata(sample))
+                    return Decision("Blocked", sample.mode + ": forty completed renders and valid camera metadata are mandatory.");
+                foreach (PortalVisibilityCameraSample camera in sample.cameraMetadata)
+                    if (camera.enabled && camera.completedRenders != 40)
+                        return Decision("Blocked", sample.mode + ": active camera completed-render count is not forty.");
+            }
+            for (int i = 0; i < 16; i += 4)
+                if (!MatchedMetadata(evidence.samples[i], evidence.samples[i + 1], evidence.samples[i + 2]))
+                    return Decision("Blocked", evidence.samples[i + 1].mode + ": common active camera inputs or histories are not matched.");
+            string[] names = { "static-edge-recursion-inside", "static-edge-recursion-outside",
+                "static-edge-custom-viewport", "static-edge-custom-far" };
+            if (evidence.triples == null || evidence.triples.Length != 4 || evidence.positives == null || evidence.positives.Length != 4)
+                return Decision("Blocked", "Edge Visibility requires four triples and four pixel-positive controls.");
+            for (int i = 0; i < 4; i++)
+            {
+                PortalVisibilityTriple triple = evidence.triples[i];
+                if (triple == null || triple.name != names[i] || !Valid(triple.referenceRepeat)
+                    || !Valid(triple.optimizedVsR1) || !Valid(triple.optimizedVsR2))
+                    return Decision("Blocked", "Every edge triple requires finite 320x320 comparisons against both references.");
+                PortalImageDifference positive = evidence.positives[i];
+                if (!Valid(positive) || positive.maxChannelDifference < 16
+                    || (positive.redMae + positive.greenMae + positive.blueMae) / 3 < 0.5)
+                    return Decision("Blocked", names[i] + ": positive control does not demonstrate visible content.");
+            }
+            string unresolved = null;
+            foreach (PortalVisibilityTriple triple in evidence.triples)
+            {
+                if (!Exact(triple.referenceRepeat))
+                {
+                    unresolved = unresolved ?? triple.name + ": reference repeat is nonexact; cause remains unresolved.";
                     continue;
                 }
                 if (!Exact(triple.optimizedVsR1) || !Exact(triple.optimizedVsR2))

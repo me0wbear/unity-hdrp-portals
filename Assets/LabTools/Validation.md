@@ -307,6 +307,68 @@ Editor tests не заменяют этот actual Player-контроль.
 повторяется дополнительно. Это отдельный эксперимент, не production-исправление.
 Без аргумента остаётся штатный Reset; неизвестная версия/API даёт Blocked.
 
+### Ограниченный Visibility edge sweep
+
+Запуск main из Git Bash в свободном изолированном checkout:
+
+```bash
+bash tools/check.sh Visibility VISIBILITY_EDGE_SWEEP=1 VISIBILITY_REINITIALIZE_AO_HISTORY=1
+```
+
+Это отдельный schema3 маршрут из **16 captures**, не дополнение к штатным 30.
+Без `VISIBILITY_EDGE_SWEEP=1` прежний маршрут и центральный ROI не меняются.
+Edge-флаг без AO preparation, неизвестное значение флага или неподдерживаемый
+owner API дают Blocked. Эффекты, RGB-пороги, AA, AOV и разрешение не меняются.
+Исходная пара отключается; её неактивный клон создаётся только после удаления
+старых virtual cameras. Все изменения fixture выполняются лишь в build-copy.
+
+Каждая строка — независимые R1/O/R2 и затем pixel-positive, через прежние
+`StaticTriple/BeginArm/CaptureAt`: одинаковые resets и ровно 40 completed main
+renders в каждом arm. Reference всегда full-prefix depth2 с culling=false.
+
+| Случай | R1/O/R2/positive virtual renders | Positive | ROI снизу слева |
+| --- | --- | --- | --- |
+| `edge-recursion-inside`, x=1.499 | 3/3/3/1 | Depth0 | (768,200,320,320) |
+| `edge-recursion-outside`, x=1.6 | 3/2/3/1 | Depth0 | (768,200,320,320) |
+| `edge-custom-viewport` | 3/1/3/0 | Budget0 | (960,200,320,320) |
+| `edge-custom-far` | 3/1/3/0 | Budget0 | (480,200,320,320) |
+
+Обычная parented камера: eye=(13.25,11.5,27.75), R=Euler(17,31,7), parent как
+в прежнем parented control. Пара находится в eye+R*(x,0,±2), A rotation=R*Y180,
+B rotation=R; оба физических проёма 2×3, маркер между ними. В координатах камеры
+root left=(x−1)/2, child2 right=(x+1)/10; их пересечение заканчивается при x=1.5.
+ROI включает этот край и видимую область первого child. Counts не корректируются
+по результатам run: неустойчивая геометрия требует отчёта и измеренного изменения
+fixture main, а не ослабления assertions.
+
+Custom controls используют side-by-side exit со смещением 30 вдоль R.right,
+где полезен только root. Перед настройкой каждого arm сбрасываются raw view и
+culling matrix. Затем linear A=Scale(1.4,1,−2)*Rotate(R).transpose;
+main.worldToCameraMatrix получает A с намеренной translation=(111,222,333),
+а cullingMatrix=P*A*T(−eye) — без этой translation. P остаётся штатной lens projection.
+Viewport case: z=2, x=2*z*tan(FOV/2)*aspect/1.4; центр проёма лежит на правой
+границе effective frustum, часть проёма видна. Far case: x=0, z=5.1,
+relative yaw=135°, farClip=10; глубина центра 2*z=10.2, проём пересекает far plane.
+Это сравнение оптимизации с существующим full-prefix, не общее утверждение о
+корректности arbitrary custom views. Parent, pose, camera far/raw view/culling
+восстанавливаются в finally; аварийное завершение использует тот же cleanup.
+
+`EvaluateEdges` отдельно требует все 16 modes/counts, 40 completed renders,
+валидные main/virtual metadata и совпадение histories/pose/matrices общих активных
+камер каждой тройки. Неиспользуемые child уровни reference не сопоставляются с
+отсутствующими optimized уровнями. Все четыре R1/R2 обязаны иметь RGB diff=0;
+иначе Blocked/unresolved. Каждый O сравнивается точно с обоими references.
+Каждый positive обязан иметь max channel difference ≥16 и среднюю RGB MAE ≥0.5;
+нулевые или отсутствующие pixels не подтверждают fixture. Доказанная регрессия
+в отдельном воспроизводимом triple остаётся Failed даже при noise в другом.
+
+Артефакты: `visibility-edge-evidence.json` с edge/AO flags, 16 PNG и обычные
+observation/metadata JSON, четыре `static-edge-*-triple.json`, четыре
+`edge-*-fixture.txt` с ROI/pose/raw/culling/projection, прежний AO preparation audit.
+Исторические Logs не меняются. Полный GPU EditMode на этой реализации:
+411/411, без пропусков, native exit0 (`Logs/task1-edge-full-main-20260831`).
+Этот результат не заменяет actual Player-проверку граничных пикселей.
+
 Для legacy build-only используйте `PortalVisibilityCheckBuilder.BuildLegacy`,
 без `PORTAL_CHECK_NAME`, с `PORTAL_LEGACY_CHECK=Rotate|Cross|Ghost` и абсолютным
 `PORTAL_LEGACY_OUTPUT`. Builder собирает сохранённую сцену и не вызывает её

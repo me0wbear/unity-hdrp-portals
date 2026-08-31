@@ -29,7 +29,9 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
     private Camera[] metadataCameras;
     private Color32[] captured;
     private int savedBudget;
-    private bool reinitializeRegularAo;
+    private bool reinitializeRegularAo, edgeSweep;
+    private RectInt captureRoi = new RectInt(480, 200, 320, 320);
+    private Action restoreEdgeFixture;
     private int preparedArms;
     [Serializable]
     private sealed class AoPreparation
@@ -63,6 +65,9 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
                 invalid = "VISIBILITY_REINITIALIZE_AO_HISTORY must be 0 or 1.";
             if (reinitializeRegularAo && !SupportsAoPreparation(Application.unityVersion, run.HdrpVersion))
                 invalid = "Regular AO preparation requires Unity 6000.5.9f1/HDRP 17.5.0 and the exact owner release method.";
+            string edgeControl = Environment.GetEnvironmentVariable("VISIBILITY_EDGE_SWEEP");
+            edgeSweep = edgeControl == "1";
+            invalid = invalid ?? EdgeSweepProblem(edgeControl, reinitializeRegularAo);
             evidence.regularAoHistoryReinitialized = reinitializeRegularAo;
         }
         catch (Exception error) { invalid = error.Message; }
@@ -86,6 +91,11 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
             || Quaternion.Angle(a.transform.rotation, Quaternion.Euler(0, 90, 0)) > 0.01f
             || Quaternion.Angle(b.transform.rotation, Quaternion.Euler(0, -90, 0)) > 0.01f)
         { Finish(new PortalCheckDecision("Blocked", "Existing Sandbox recursion fixture does not match the archived pair.")); yield break; }
+        if (edgeSweep)
+        {
+            yield return MeasureEdges(a, b);
+            yield break;
+        }
         context.Save("visibility-contract.txt",
             "Existing Recursion_Pair and marker; AA=None; unchanged lens/quality/AOV; 320x320 central RGB ROI.\n"
             + "Schema2: independent R1/optimized/R2 arms, identical setup reset, capture after 40 completed main renders.\n"
@@ -200,6 +210,13 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
     private static bool SupportsAoPreparation(string unityVersion, string hdrpVersion) =>
         unityVersion == "6000.5.9f1" && hdrpVersion == "17.5.0" && ReleaseAoHistory != null
         && ReleaseAoHistory.ReturnType == typeof(void) && ReleaseAoHistory.DeclaringType == typeof(HDCamera);
+
+    private static string EdgeSweepProblem(string flag, bool regularAo)
+    {
+        if (!string.IsNullOrEmpty(flag) && flag != "0" && flag != "1")
+            return "VISIBILITY_EDGE_SWEEP must be 0 or 1.";
+        return flag == "1" && !regularAo ? "VISIBILITY_EDGE_SWEEP=1 requires VISIBILITY_REINITIALIZE_AO_HISTORY=1." : null;
+    }
 
     private static string AoTargetId(RTHandle handle) =>
         handle?.rt == null ? null : handle.rt.GetEntityId().ToString();
@@ -338,6 +355,140 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
         }
     }
 
+    private IEnumerator MeasureEdges(Portal a, Portal b)
+    {
+        context.Save("visibility-contract.txt",
+            "VISIBILITY_EDGE_SWEEP=1; schema3; exactly 16 captures, not the default 30-capture route.\n"
+            + "VISIBILITY_REINITIALIZE_AO_HISTORY=1 required; unchanged AA, effects, pixel thresholds and native lens projection.\n"
+            + "Each independent R1/O/R2/positive arm captures completed main render 40 with matching active-camera metadata.\n"
+            + "Recursion x=1.499: 3/3/3/1; x=1.6: 3/2/3/1. ROI (768,200,320,320).\n"
+            + "Custom viewport and far-straddle: 3/1/3/0. Viewport ROI (960,200,320,320); far ROI (480,200,320,320).\n"
+            + "All reference repeats and optimized comparisons exact RGB; each positive max>=16 and mean RGB MAE>=0.5.\n"
+            + "Custom linear view compares optimization with existing full-prefix only, not general custom-view correctness.\n");
+        context.Save("regular-ao-history-control.txt",
+            "Regular AO history is released through its HDCamera owner at each independent edge arm setup; effects remain enabled.\n");
+        foreach (Portal portal in context.Portals)
+            if (portal != a && portal != b) portal.gameObject.SetActive(false);
+        GameObject sourcePair = a.transform.parent.gameObject;
+        a.enabled = b.enabled = false;
+        sourcePair.SetActive(false);
+        yield return null;
+        // Не переносим старые виртуальные камеры в build-copy fixture.
+        if (sourcePair.GetComponentsInChildren<Camera>(true).Length != 0)
+        { Finish(new PortalCheckDecision("Blocked", "Source pair still contains cameras before inactive cloning.")); yield break; }
+
+        var edges = new PortalVisibilityEdgeEvidence { edgeSweep = true,
+            regularAoHistoryReinitialized = reinitializeRegularAo, positives = new PortalImageDifference[4] };
+        Camera main = context.Main;
+        Transform player = context.Player;
+        Transform oldParent = player.parent;
+        Vector3 oldPosition = player.localPosition, oldScale = player.localScale;
+        Quaternion oldRotation = player.localRotation, oldCameraRotation = main.transform.localRotation;
+        float oldFar = main.farClipPlane;
+        Matrix4x4 oldView = main.worldToCameraMatrix, oldCulling = main.cullingMatrix;
+        RectInt oldRoi = captureRoi;
+        GameObject parent = null, clone = null;
+        restoreEdgeFixture = () =>
+        {
+            roots = null; cameras = null; observing = null; metadataCameras = null;
+            if (clone != null) { clone.SetActive(false); Destroy(clone); }
+            player.SetParent(oldParent, false);
+            player.localPosition = oldPosition; player.localRotation = oldRotation; player.localScale = oldScale;
+            main.transform.localRotation = oldCameraRotation;
+            main.farClipPlane = oldFar;
+            main.worldToCameraMatrix = oldView; main.cullingMatrix = oldCulling;
+            captureRoi = oldRoi;
+            if (parent != null) Destroy(parent);
+        };
+        try
+        {
+            parent = new GameObject("Visibility_Edge_Camera_Parent");
+            parent.transform.SetPositionAndRotation(new Vector3(2, 3, 4), Quaternion.Euler(11, 23, 5));
+            player.SetParent(parent.transform, true);
+            clone = Instantiate(sourcePair);
+            clone.name = "Visibility_Edge_Pair";
+            Portal[] ends = clone.GetComponentsInChildren<Portal>(true);
+            Portal entrance = ends.Single(portal => portal.name == a.name);
+            Portal exit = ends.Single(portal => portal.name == b.name);
+            Transform marker = clone.GetComponentsInChildren<Transform>(true).Single(value => value.name == "Recursion_Marker");
+            marker.name = "Visibility_Edge_Marker";
+            foreach (Portal portal in ends)
+            {
+                portal.enabled = false;
+                portal.playerCamera = main;
+                portal.recursionDepth = 2;
+                portal.SetViewTexture(null); portal.SetContentBuffers(null, Matrix4x4.identity);
+            }
+            Vector3 eye = new Vector3(13.25f, 11.5f, 27.75f);
+            Quaternion rotation = Quaternion.Euler(17, 31, 7);
+            ConfigureEdgeFixture(entrance, exit, marker, eye, rotation, 0, oldFar);
+            clone.SetActive(true);
+            entrance.enabled = true;
+            roots = new[]{entrance};
+            string[] names = { "edge-recursion-inside", "edge-recursion-outside", "edge-custom-viewport", "edge-custom-far" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                int index = i;
+                captureRoi = i < 2 ? new RectInt(768, 200, 320, 320)
+                    : i == 2 ? new RectInt(960, 200, 320, 320) : new RectInt(480, 200, 320, 320);
+                Action setup = () => ConfigureEdgeFixture(entrance, exit, marker, eye, rotation, index, oldFar);
+                setup();
+                context.Save(names[i] + "-fixture.txt", "VISIBILITY_EDGE_SWEEP=1\nROI bottom-left: " + captureRoi
+                    + "\nEye: " + eye.ToString("F9") + "\nRotation: " + rotation.ToString("F9")
+                    + "\nEntrance: " + entrance.transform.position.ToString("F9")
+                    + "\nExit: " + exit.transform.position.ToString("F9") + "\nFar: " + main.farClipPlane
+                    + "\nRaw view:\n" + main.worldToCameraMatrix.ToString("F9")
+                    + "\nCulling:\n" + main.cullingMatrix.ToString("F9")
+                    + "\nNative projection:\n" + main.projectionMatrix.ToString("F9"));
+                yield return StaticTriple(entrance, names[i], setup, value => edges.positives[index] = value, 2, i >= 2);
+            }
+        }
+        finally { RestoreEdgeFixture(); }
+        edges.samples = samples.ToArray(); edges.triples = triples.ToArray();
+        context.Save("regular-ao-history-preparation.json", JsonUtility.ToJson(new AoPreparations { cameras = aoPreparations.ToArray() }, true));
+        context.Save("visibility-edge-evidence.json", JsonUtility.ToJson(edges, true));
+        Finish(PortalVisibilityPolicy.EvaluateEdges(edges, context.Problem));
+    }
+
+    private void ConfigureEdgeFixture(Portal entrance, Portal exit, Transform marker,
+        Vector3 eye, Quaternion rotation, int index, float normalFar)
+    {
+        Camera main = context.Main;
+        main.ResetWorldToCameraMatrix(); main.ResetCullingMatrix();
+        main.farClipPlane = index == 3 ? 10 : normalFar;
+        SetPose(eye, rotation);
+        float z = index == 3 ? 5.1f : 2f;
+        // При custom view ширина задаётся effective depth=2*z и горизонтальным scale=1.4.
+        float x = index == 0 ? 1.499f : index == 1 ? 1.6f : index == 2
+            ? 2 * z * Mathf.Tan(main.fieldOfView * Mathf.Deg2Rad * 0.5f) * main.aspect / 1.4f : 0;
+        entrance.transform.SetPositionAndRotation(eye + rotation * new Vector3(x, 0, z),
+            rotation * Quaternion.Euler(0, index == 3 ? 135 : 180, 0));
+        exit.transform.SetPositionAndRotation(eye + rotation * new Vector3(index < 2 ? x : x + 30, 0, index < 2 ? -2 : z), rotation);
+        foreach (Portal portal in new[]{entrance, exit})
+        {
+            portal.screen.transform.localPosition = Vector3.zero;
+            portal.screen.transform.localScale = new Vector3(2, 3, 1);
+            portal.CacheOpeningSize();
+        }
+        marker.SetPositionAndRotation(index < 2 ? eye + rotation * new Vector3(x, 0, 0)
+            : exit.transform.position + rotation * new Vector3(0, 0, 1), rotation);
+        if (index < 2) return;
+        Matrix4x4 linear = Matrix4x4.Scale(new Vector3(1.4f, 1, -2)) * Matrix4x4.Rotate(rotation).transpose;
+        Matrix4x4 raw = linear;
+        raw.SetColumn(3, new Vector4(111, 222, 333, 1));
+        main.worldToCameraMatrix = raw;
+        // Culling согласован с camera-relative effective view, не с намеренно неверным raw translation.
+        main.cullingMatrix = main.projectionMatrix * linear * Matrix4x4.Translate(-eye);
+    }
+
+    private void RestoreEdgeFixture()
+    {
+        // Guard может завершить вложенный arm с ошибкой; cleanup нужен также из Finish/OnDisable.
+        Action restore = restoreEdgeFixture;
+        restoreEdgeFixture = null;
+        restore?.Invoke();
+    }
+
     private void SetPose(Vector3 eye, Quaternion rotation)
     {
         context.Player.SetPositionAndRotation(eye - rotation * context.EyeOffset, rotation);
@@ -358,7 +509,7 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
         observing = new PortalVisibilitySample { mode = mode, virtualCallbacks = new int[roots.Length],
             bindingsValid = true, capacityValid = true, historyValid = armResetValid };
         expectedVirtualHistory = virtualHistory; requireCapacity = capacity; previousDepth = float.NegativeInfinity;
-        yield return context.Capture(mode, new RectInt(480, 200, 320, 320), value => captured = value);
+        yield return context.Capture(mode, captureRoi, value => captured = value);
         observing.completedMainRenders = clock.Completed;
         observing.clockValid = observing.clockValid && clock.Valid && clock.Completed == completedMainRenders;
         samples.Add(observing);
@@ -533,12 +684,14 @@ public sealed class PortalVisibilityCheck : MonoBehaviour
 
     private void Finish(PortalCheckDecision decision)
     {
+        RestoreEdgeFixture();
         if (run != null && !run.IsCompleted)
             run.Complete("Visibility", decision.status, context?.Captures ?? 0, 0, decision.failureReason);
     }
 
     private void OnDisable()
     {
+        RestoreEdgeFixture();
         if (subscribed)
         {
             RenderPipelineManager.beginCameraRendering -= OnCamera;

@@ -102,5 +102,15 @@ namespace Portals.Lab.Tests
             MethodInfo method = probe.GetType().GetMethod("SupportsAoPreparation", BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That((bool)method.Invoke(null, new object[]{unity, hdrp}), Is.EqualTo(expected));
         }
+
+        [TestCase(null, false, true)] [TestCase("0", false, true)]
+        [TestCase("1", true, true)] [TestCase("1", false, false)]
+        [TestCase("2", true, false)] [TestCase("true", true, false)]
+        public void EdgeSweepRequiresExplicitFlagAndAoPreparation(string flag, bool ao, bool allowed)
+        {
+            MethodInfo method = probe.GetType().GetMethod("EdgeSweepProblem", BindingFlags.Static | BindingFlags.NonPublic);
+            string problem = (string)method.Invoke(null, new object[]{flag, ao});
+            Assert.That(string.IsNullOrEmpty(problem), Is.EqualTo(allowed));
+        }
     }
 }

@@ -175,6 +175,120 @@ namespace Portals.Lab.Tests
             Assert.That(Status(e), Is.EqualTo("Passed"));
         }
 
+        private static object EdgeEvidence()
+        {
+            string[] modes = {
+                "edge-recursion-inside-reference-r1", "edge-recursion-inside-visible", "edge-recursion-inside-reference-r2", "edge-recursion-inside-shallow",
+                "edge-recursion-outside-reference-r1", "edge-recursion-outside-visible", "edge-recursion-outside-reference-r2", "edge-recursion-outside-shallow",
+                "edge-custom-viewport-reference-r1", "edge-custom-viewport-visible", "edge-custom-viewport-reference-r2", "edge-custom-viewport-no-view",
+                "edge-custom-far-reference-r1", "edge-custom-far-visible", "edge-custom-far-reference-r2", "edge-custom-far-no-view" };
+            int[] counts = { 3,3,3,1, 3,2,3,1, 3,1,3,0, 3,1,3,0 };
+            Array rows = Array.CreateInstance(LabSerializationTests.FindType("Portals.Lab.Validation.PortalVisibilitySample"), 16);
+            for (int i = 0; i < rows.Length; i++) rows.SetValue(Make("PortalVisibilitySample", "mode", modes[i],
+                "mainCallbacks", 1, "virtualCallbacks", new[]{counts[i]}, "bindingsValid", true,
+                "capacityValid", true, "historyValid", true, "clockValid", true, "completedMainRenders", 40,
+                "cameraMetadata", Cameras(new[]{counts[i]}, 40, -1)), i);
+            string[] names = { "static-edge-recursion-inside", "static-edge-recursion-outside",
+                "static-edge-custom-viewport", "static-edge-custom-far" };
+            Array comparisons = Array.CreateInstance(LabSerializationTests.FindType("Portals.Lab.Validation.PortalVisibilityTriple"), 4);
+            Array positives = Array.CreateInstance(LabSerializationTests.FindType("Portals.Lab.Validation.PortalImageDifference"), 4);
+            for (int i = 0; i < 4; i++)
+            {
+                comparisons.SetValue(Make("PortalVisibilityTriple", "name", names[i], "referenceRepeat", Difference(),
+                    "optimizedVsR1", Difference(), "optimizedVsR2", Difference()), i);
+                positives.SetValue(Difference(0.5, 16), i);
+            }
+            return Make("PortalVisibilityEdgeEvidence", "edgeSweep", true, "regularAoHistoryReinitialized", true,
+                "samples", rows, "triples", comparisons, "positives", positives);
+        }
+
+        private static string EdgeStatus(object e) => (string)Field(
+            LabSerializationTests.FindType("Portals.Lab.Validation.PortalVisibilityPolicy").GetMethod("EvaluateEdges")
+                .Invoke(null, new[]{e, ""}), "status");
+
+        [Test] public void FourMatchedEdgeControlsCanPass() => Assert.That(EdgeStatus(EdgeEvidence()), Is.EqualTo("Passed"));
+
+        [TestCase("edgeSweep")] [TestCase("regularAoHistoryReinitialized")]
+        public void EdgeEvidenceRequiresBothDiagnosticFlags(string flag)
+        {
+            object e = EdgeEvidence(); Set(e, flag, false);
+            Assert.That(EdgeStatus(e), Is.EqualTo("Blocked"));
+        }
+
+        [TestCase(1, 2)] [TestCase(5, 3)] [TestCase(9, 3)] [TestCase(13, 3)]
+        [TestCase(3, 0)] [TestCase(7, 0)] [TestCase(11, 1)] [TestCase(15, 1)]
+        public void EdgesRequireExactGeometryAndPositiveRenderCounts(int index, int count)
+        {
+            object e = EdgeEvidence(); Set(Sample(e, index), "virtualCallbacks", new[]{count});
+            Assert.That(EdgeStatus(e), Is.EqualTo("Failed"));
+        }
+
+        [TestCase(0)] [TestCase(1)] [TestCase(2)] [TestCase(3)]
+        public void EveryEdgeRepeatMustBeExact(int index)
+        {
+            object e = EdgeEvidence(); Set(Triple(e, index), "referenceRepeat", Difference(1.0 / 102400, 1));
+            Assert.That(EdgeStatus(e), Is.EqualTo("Blocked"));
+        }
+
+        [TestCase(0, "optimizedVsR1")] [TestCase(0, "optimizedVsR2")]
+        [TestCase(1, "optimizedVsR1")] [TestCase(1, "optimizedVsR2")]
+        [TestCase(2, "optimizedVsR1")] [TestCase(2, "optimizedVsR2")]
+        [TestCase(3, "optimizedVsR1")] [TestCase(3, "optimizedVsR2")]
+        public void EdgeOneByteAgainstEitherRepeatableReferenceFails(int index, string field)
+        {
+            object e = EdgeEvidence(); Set(Triple(e, index), field, Difference(1.0 / 102400, 1));
+            Assert.That(EdgeStatus(e), Is.EqualTo("Failed"));
+        }
+
+        [TestCase(0, 0.49, 16)] [TestCase(1, 0.49, 16)] [TestCase(2, 0.49, 16)] [TestCase(3, 0.49, 16)]
+        [TestCase(0, 0.5, 15)] [TestCase(1, 0.5, 15)] [TestCase(2, 0.5, 15)] [TestCase(3, 0.5, 15)]
+        public void AllEdgePositivesRetainBothPixelThresholds(int index, double mae, int max)
+        {
+            object e = EdgeEvidence(); ((Array)Field(e, "positives")).SetValue(Difference(mae, max), index);
+            Assert.That(EdgeStatus(e), Is.EqualTo("Blocked"));
+        }
+
+        [TestCase(0)] [TestCase(1)] [TestCase(2)] [TestCase(3)] [TestCase(4)] [TestCase(5)]
+        public void MissingOrUnmatchedEdgeEvidenceBlocks(int kind)
+        {
+            object e = EdgeEvidence();
+            if (kind == 0) Set(Sample(e, 1), "cameraMetadata", null);
+            if (kind == 1) Set(Sample(e, 15), "completedMainRenders", 41);
+            if (kind == 2) Set(Sample(e, 5), "mode", "edge-recursion-inside-visible");
+            if (kind == 3) Set(Triple(e, 3), "optimizedVsR2", null);
+            if (kind == 4) Set(CameraRow(e, 9, 0), "view", new float[16]);
+            if (kind == 5) Set(e, "positives", null);
+            Assert.That(EdgeStatus(e), Is.EqualTo("Blocked"));
+        }
+
+        [TestCase(1, 0)] [TestCase(1, 3)] [TestCase(5, 2)] [TestCase(9, 1)] [TestCase(13, 1)]
+        public void EdgeCommonActiveHistoryEpochsMustMatch(int sample, int row)
+        {
+            object e = EdgeEvidence();
+            Set(CameraRow(e, sample, row), "historyBefore", 79u);
+            Set(CameraRow(e, sample, row), "historyAfter", 80u);
+            Assert.That(EdgeStatus(e), Is.EqualTo("Blocked"));
+        }
+
+        [Test]
+        public void EdgeUnconsumedChildrenAndAbsoluteTimeDoNotPreventMatching()
+        {
+            object e = EdgeEvidence();
+            Set(CameraRow(e, 4, 3), "historyBefore", 79u);
+            Set(CameraRow(e, 4, 3), "historyAfter", 80u);
+            Set(Sample(e, 5), "time", 900d);
+            Assert.That(EdgeStatus(e), Is.EqualTo("Passed"));
+        }
+
+        [Test]
+        public void EdgeRepeatNoiseDoesNotHideASeparatePixelRegression()
+        {
+            object e = EdgeEvidence();
+            Set(Triple(e, 0), "referenceRepeat", Difference(0.01, 2));
+            Set(Triple(e, 1), "optimizedVsR1", Difference(0.01, 2));
+            Assert.That(EdgeStatus(e), Is.EqualTo("Failed"));
+        }
+
         [Test]
         public void ClockCountsCompletedEventsNotFrameGapsAndRejectsDuplicates()
         {
