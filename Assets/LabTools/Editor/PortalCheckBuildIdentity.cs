@@ -29,7 +29,8 @@ public sealed class PortalCheckBuildIdentity : BuildPlayerProcessor, IPreprocess
         return options;
     }
 
-    public static bool IsMigratedCheck(string check) => check == "Color" || check == "Seam";
+    public static bool IsMigratedCheck(string check) => check == "Color" || check == "Seam"
+        || check == "SandboxParity" || check == "Performance";
 
     public static void RequireCleanBuild(BuildOptions options, string check)
     {

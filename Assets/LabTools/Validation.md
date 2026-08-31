@@ -1,4 +1,4 @@
-# Проверки Color и Seam
+# Проверки Color, Seam, SandboxParity и Performance
 
 Проверки связывают итог с конкретной сборкой и сохраняют данные до объявления результата.
 Поддерживаемая конфигурация: Unity 6000.5.9f1, установленный HDRP 17.5.0,
@@ -10,9 +10,10 @@ Windows x64. Для чтения идентичности исходников �
 Он задаёт `PORTAL_CHECK_NAME`, `PORTAL_CHECK_COMMIT`, `PORTAL_CHECK_PROJECT`,
 `PORTAL_CHECK_RUN_ID`, `PORTAL_CHECK_OUTPUT` перед сборкой и запуском Player.
 Builders `ColorCheckBuilder.BuildPlayer` и `SeamCheckBuilder.BuildPlayer` совместимы
-с этим интерфейсом. Не запускайте второй Editor для того же checkout.
+с этим интерфейсом. Для исходной Sandbox доступны `SandboxParityCheckBuilder.BuildPlayer`
+и `PortalPerformanceCheckBuilder.BuildPlayer`. Не запускайте второй Editor для того же checkout.
 
-Color/Seam явно добавляют `BuildOptions.CleanBuildCache`. Preprocess callback
+Все четыре проверки явно добавляют `BuildOptions.CleanBuildCache`. Preprocess callback
 отклоняет сертифицированную сборку без этой опции: изменившийся runId не является
 зависимостью обычного кэша обработки сцен. Дополнительно callback регистрирует
 `Logs/portal-check-build-state.json` через `BuildPipelineContext.DependOnPath`.
@@ -22,7 +23,7 @@ Player-сборок остаётся обязательной интеграци
 Причина принудительной очистки описана в
 [документации Unity по incremental builds](https://unity.com/blog/engine-platform/accelerating-player-builds-with-incremental-build-pipeline).
 
-Identity внедряется только в копию первой сцены сборки Color/Seam. В ней находятся
+Identity внедряется только в копию первой сцены выбранной сертифицируемой сборки. В ней находятся
 реальный SHA, канонический путь проекта, runId, каталог результата, dirty-флаг,
 версии Unity/HDRP и SHA-256 манифеста исходников. Манифест включает пути и хеши
 реальных байтов tracked и неигнорируемых untracked-файлов в Assets, Packages,
@@ -87,7 +88,95 @@ if (run != null)
 Дополнительные probes должны получить собственные acceptance-тесты, регистрацию
 в `PortalCheckBuildIdentity.IsMigratedCheck`, clean build options и разрешение
 соответствующего check в `PortalCheckSession`. Неизвестный check не получает Passed.
-В этом этапе SandboxParity/Performance не реализованы.
+SandboxParity/Performance используют этот контракт и собственные policies ниже.
+
+## SandboxParity
+
+Builder создаёт `BuildSandboxParityCheck/SandboxParityCheck.exe` из исходной
+`Assets/portal/Examples/PortalSandbox.unity`. Source scene не сохраняется и не меняется.
+`SandboxCheckBuildProcessor` внедряет один probe только в build-copy выбранного check,
+после проверки встроенного identity. Обычный Play/build не получает bootstrap/probe.
+HDRP Unlit shader передаётся сериализованной ссылкой для runtime-owned marker material.
+
+Windows64 Development, D3D12, 1280×720. Архивные eye poses: through
+(40,1.6,-5.98), direct (0,1.6,6.02), yaw180; direct вычисляется через
+`PortalMath.EntranceToExit`. ROI `(480,260,320,200)` указан в координатах
+`Texture2D.GetPixels` снизу слева. RGB сравнивается в 8-bit capture units, alpha исключён.
+
+Четыре режима: baseline, SSAO off обеих камер, SSAO off только virtual,
+regular projection с SSAO ON. В каждом — main AA None и TAA; собственный AA виртуальных
+камер сохраняет production policy. Между режимами main frame settings восстанавливаются,
+виртуальные камеры пересоздаются. Overrides идут после PortalSystem LateUpdate.
+Для каждой пары: 120 settle → through, direct pose →1 settle →direct-first,
+120 settle →direct, 120 settle →direct-repeat. Прямые кадры не имеют virtual cameras.
+
+Статический gate относится только к baseline/None: каждая channel MAE≤0.15,
+max channel difference≤2. Остальные режимы, TAA и direct-repeat noise диагностические;
+они не заменяют baseline и не доказывают качество motion. Missing capture/reference,
+неподтверждённые camera settings или неполный набор дают Blocked.
+
+Отдельный leakage control выполняется на 1 м от портала после исходных ROI кадров.
+Marker ставится между mapped eye и exit plane по пересечению луча, без выбора знака оси.
+HDRP Unlit emission `(8192,0,8192)` рассчитан на яркий маркер при EV11, но его наличие
+доказывается пикселями, не параметром material. Сначала normal oblique должен скрыть
+marker, затем regular projection обязан показать его. Classifier: R/B≥128,G≤96,
+R−G/B−G≥64; существующие magenta pixels исключаются по background соответствующей проекции.
+Regular positive count=0 или неполный fixture дают Blocked; видимый marker при oblique
+и доказанном positive control даёт Failed. Regular projection не считается исправлением.
+
+Артефакты: `parity-metrics.csv`, `parity-summary.txt`, все PNG/metadata по mode/AA,
+per-mode metrics JSON, `leakage-control.json` и leakage PNG/background/fixture.
+Все данные сохраняются и при Failed. Один финальный PortalCheckResult идёт после всех
+режимов/control; runtime exceptions и watchdog по-прежнему обрабатываются общим контрактом.
+Заморозка Rigidbody/отключение движения ограничены диагностическим Player; shared profiles
+и чужие scene bodies не меняются.
+
+## Performance
+
+Builder: `BuildPortalPerformanceCheck/PortalPerformanceCheck.exe`, та же неизменённая
+Sandbox, Windows64 Development/D3D12. 1920×1080, VSync0, unlimited FPS, runInBackground.
+Root `(0,0.1,-3.5)`, eye `(0,1.75,-3.5)`, yaw0 или180 для behind.
+
+В каждом из двух раундов: off, depth2, depth0, depth2-no-aov, depth0-no-aov,
+depth2-divider2, behind. В no-aov меняется только `writeContentDepth=false`;
+перед сменой параметров portals отключаются на кадр, чтобы AOV requests не остались
+на старых камерах. Каждый режим: ровно 180 warmup и360 sample frames.
+
+`performance.csv` содержит median/p95/counts; `round*/<mode>-samples.csv` — реальные
+покадровые значения/наличие counters. Time.unscaledDeltaTime хранится отдельно от
+FrameTiming; повторные frameStartTimestamp не создают дубликаты. Discovery, логирование,
+PNG, ReadPixels/EncodePNG и дисковый I/O выполняются вне timed loop.
+Недоступные числовые значения — literal `null`, статистика не подменяется -1/NaN/нулём.
+Percentile сохраняет архивный sorted index `floor(n*p)` с ограничением n−1,
+без интерполяции. CSV числовой формат InvariantCulture.
+
+`beginCameraRendering` counts не включают AOV. Requests перечисляются отдельно от
+executions; execution evidence — CPU `ProfilerRecorderSample.Count`, проверенный
+против `Recorder.sampleBlockCount`. Empty CPU recorder допускает zero только при
+валидном включённом CPU sampler с zero blocks; disagreement делает assertion unavailable.
+Для доказательства отсутствия AOV нужны все360 frame readings, не частичная выборка.
+GPU recorder `HDRenderPipelineRenderAOV` использует GpuRecorder и ns→ms; его sample.Count
+также сохраняется. `gpuFrameTime` не называется полной стоимостью портального GPU render.
+Смысл count описан в [Unity ProfilerRecorderSample.Count](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Unity.Profiling.ProfilerRecorderSample.Count.html).
+Отсутствующий aggregate Draw Calls Count не заменяется суммой несопоставимых counters;
+доступные имена/единицы остаются в `available-counters.txt`.
+
+PNG depth2/depth0 снимаются после timed loop в обоих раундах. Опубликованный ROI
+сверху слева `(865,420,190,290)` переводится в Texture2D `(865,370,190,290)`:
+`1080−420−290=370`. Gate требует exact RGB MAE=0,max=0.
+
+Cost gate: два полных раунда; default depth2 в перспективе имеет1 main+1 virtual и
+никаких AOV requests/executions; off/behind имеют только1 main. Текущий production
+renderer ожидаемо даёт Failed за избыточные камеры/AOV, а не за аппаратный порог ms.
+Недоступное обязательное evidence даёт Blocked; оно не отменяет уже доказанную
+избыточную работу. Timings и per-round depth2/depth0 median ratios диагностические,
+не утверждение об улучшении production. Дополнительные файлы: mode settings/metadata,
+per-round ROI JSON, `performance-contract.txt`, `performance-summary.txt`.
+
+Общий watchdog остаётся180 сек; 7560 warmup/sample frames занимают126 сек при60 FPS
+без overhead. Более медленный прогон может дать Blocked до завершения; сокращение
+выборки или обход watchdog не выполняются. Ресурсы probes освобождаются при disable/destroy.
+Ненулевой native Player exit не игнорируется даже при записанном result.json.
 
 ## Сериализация Seam
 

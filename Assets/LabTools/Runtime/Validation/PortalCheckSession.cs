@@ -61,7 +61,8 @@ namespace Portals.Lab.Validation
                 status = "Failed";
                 reason = pendingFailure;
             }
-            else if (status == "Passed" && identity.check != "Color" && identity.check != "Seam")
+            else if (status == "Passed" && identity.check != "Color" && identity.check != "Seam"
+                && identity.check != "SandboxParity" && identity.check != "Performance")
             {
                 status = "Blocked";
                 reason = "Check has no certified acceptance policy.";
