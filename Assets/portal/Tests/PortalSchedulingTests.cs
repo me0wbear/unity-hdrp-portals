@@ -17,6 +17,11 @@ public sealed class PortalSchedulingTests
     private Portal a, b;
     private readonly List<GameObject> owned = new List<GameObject>();
     private int previousBudget;
+    private delegate int PlanCall(Camera camera, int ceiling, out float coverage);
+
+    private static PlanCall Planner(PortalRenderer renderer) =>
+        (PlanCall)typeof(PortalRenderer).GetMethod("Plan", Hidden)
+            .CreateDelegate(typeof(PlanCall), renderer);
 
     [UnitySetUp]
     public IEnumerator SetUp()
@@ -84,6 +89,217 @@ public sealed class PortalSchedulingTests
         Assert.That(a.GetComponentsInChildren<Camera>(true), Has.Length.EqualTo(1));
         Assert.That(Renderers[b].LevelCount, Is.Zero);
         Assert.That(a.recursionDepth, Is.EqualTo(2));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WarmPlannerDoesNotAllocateManagedMemory(bool recursive)
+    {
+        if (recursive) FaceToFace();
+        PlanCall plan = Planner(Renderers[a]);
+        for (int i = 0; i < 256; i++) plan(viewer, 3, out _);
+        // Такой же синхронный recorder используют установленные Core/Collections tests.
+        // Положительный контроль обязателен: неподдержанный счётчик не доказывает ноль.
+        UnityEngine.Profiling.Recorder recorder = UnityEngine.Profiling.Recorder.Get("GC.Alloc");
+        Assert.That(recorder.isValid, Is.True);
+        recorder.FilterToCurrentThread();
+        try
+        {
+            recorder.enabled = false;
+            recorder.enabled = true;
+            byte[] control = new byte[128];
+            recorder.enabled = false;
+            int positive = recorder.sampleBlockCount;
+            GC.KeepAlive(control);
+            Debug.Log($"[PortalPlannerAllocationControl] samples={positive}");
+            Assert.That(positive, Is.GreaterThan(0), "GC.Alloc must detect a known managed allocation.");
+
+            recorder.enabled = true;
+            int total = 0;
+            for (int i = 0; i < 512; i++) total += plan(viewer, 3, out _);
+            recorder.enabled = false;
+            int allocated = recorder.sampleBlockCount;
+            Debug.Log($"[PortalPlannerAllocation] recursive={recursive} calls=512 allocations={allocated}");
+            Assert.That(total, Is.EqualTo(512 * (recursive ? 3 : 1)));
+            Assert.That(allocated, Is.Zero, "Warmed planning must not allocate strings or scratch buffers.");
+        }
+        finally { recorder.enabled = false; }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void PlannerReclassifiesRuntimeShaderReplacement(bool exitScreen)
+    {
+        Portal subject = exitScreen ? b : a;
+        Material original = subject.screen.sharedMaterial;
+        Material replacement = new Material(original);
+        try
+        {
+            subject.screen.sharedMaterial = replacement;
+            PlanCall plan = Planner(Renderers[a]);
+            Assert.That(plan(viewer, 3, out _), Is.EqualTo(1));
+            Shader unsupported = Shader.Find("HDRP/Unlit");
+            Assert.That(unsupported, Is.Not.Null, "The unsupported-shader control must exist.");
+            replacement.shader = unsupported;
+            Assert.That(plan(viewer, 3, out _), Is.EqualTo(3), "Changed shader must retain the conservative prefix.");
+            replacement.shader = original.shader;
+            Assert.That(plan(viewer, 3, out _), Is.EqualTo(1), "Restored shader must be recognized.");
+        }
+        finally
+        {
+            subject.screen.sharedMaterial = original;
+            Object.Destroy(replacement);
+        }
+    }
+
+    [TestCase(0f, 0f, 0f, false)]
+    [TestCase(17f, 31f, 7f, false)]
+    [TestCase(-12f, 68f, 4f, false)]
+    [TestCase(17f, 31f, 7f, true)]
+    public void OrdinaryPoseRetainsOneUsefulLevel(float pitch, float yaw, float roll, bool parented)
+    {
+        // Жёсткий перенос всего fixture не меняет взаимную видимость его проёмов.
+        Vector3 translation = new Vector3(13.25f, -4.5f, 27.75f);
+        Quaternion rotation = Quaternion.Euler(pitch, yaw, roll);
+        viewer.transform.SetPositionAndRotation(translation, rotation);
+        if (parented)
+        {
+            Transform parent = Host("Ordinary Camera Parent").transform;
+            parent.SetPositionAndRotation(new Vector3(2, 3, 4), Quaternion.Euler(11, 23, 5));
+            viewer.transform.SetParent(parent, true);
+        }
+        a.transform.SetPositionAndRotation(translation + rotation * new Vector3(0, 0, 2),
+            rotation * Quaternion.Euler(0, 180, 0));
+        b.transform.SetPositionAndRotation(translation + rotation * new Vector3(30, 0, 2), rotation);
+        int demand = Planner(Renderers[a])(viewer, 3, out _);
+        Tick();
+        Assert.That(demand, Is.EqualTo(1), "An ordinary rigidly moved fixture still has one useful level.");
+        Assert.That(Renderers[a].LevelCount, Is.EqualTo(demand));
+        Assert.That(EnabledCameras(a), Is.EqualTo(1));
+        Assert.That(Renderers[b].LevelCount, Is.Zero);
+        // Та же поза с реальной рекурсией обязана сохранить дочерние виды.
+        b.transform.position = translation + rotation * new Vector3(0, 0, -2);
+        Tick();
+        Assert.That(Renderers[a].LevelCount, Is.EqualTo(3));
+        Assert.That(EnabledCameras(a), Is.EqualTo(3));
+        foreach (Camera camera in a.GetComponentsInChildren<Camera>(true))
+        {
+            if (!camera.enabled) continue;
+            Begin(camera);
+            Assert.That(a.ViewTexture, Is.SameAs(b.ViewTexture));
+            Assert.That(a.ViewTexture, Is.Not.SameAs(camera.targetTexture));
+        }
+    }
+
+    [TestCase(0f)]
+    [TestCase(300f)]
+    public void CameraRelativeViewUsesLinearPartAndTransformEye(float rawTranslation)
+    {
+        viewer.transform.position = new Vector3(7, 2, -3);
+        a.transform.position = viewer.transform.position + new Vector3(0, 0, 2);
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(2, 1, -1));
+        view.SetColumn(3, new Vector4(rawTranslation, -rawTranslation, rawTranslation, 1));
+        viewer.worldToCameraMatrix = view;
+        Assert.That(Planner(Renderers[a])(viewer, 1, out float coverage), Is.EqualTo(1));
+        // Проём 1x1 при z=2: удвоенная X-строка удваивает площадь покрытия.
+        float expected = 2 * Mathf.Pow(0.5f / (2 * Mathf.Tan(30 * Mathf.Deg2Rad)), 2);
+        Assert.That(coverage, Is.EqualTo(expected).Within(1e-5));
+        a.transform.rotation = Quaternion.identity;
+        Assert.That(Planner(Renderers[a])(viewer, 1, out _), Is.Zero,
+            "Facing follows the transform eye used by HDRP camera-relative rendering.");
+    }
+
+    [TestCase(15f, 1)]
+    [TestCase(19.9f, 1)]
+    [TestCase(20f, 1)]
+    [TestCase(20.1f, 1)]
+    [TestCase(30f, 0)]
+    public void CameraRelativeFarPlaneUsesUnnormalizedViewRow(float distance, int expected)
+    {
+        viewer.farClipPlane = 10;
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(1, 1, -0.5f));
+        view.m23 = 300;
+        viewer.worldToCameraMatrix = view;
+        a.transform.SetPositionAndRotation(new Vector3(0, 0, distance), Quaternion.Euler(0, 135, 0));
+        Assert.That(Planner(Renderers[a])(viewer, 1, out _), Is.EqualTo(expected));
+    }
+
+    [TestCase(0f, 1)]
+    [TestCase(1.0773503f, 1)]
+    [TestCase(1.09f, 0)]
+    public void CameraRelativeLinearViewRetainsViewportEdge(float horizontal, int expected)
+    {
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(2, 1, -1));
+        view.m03 = 300;
+        viewer.worldToCameraMatrix = view;
+        a.transform.position = new Vector3(horizontal, 0, 2);
+        Assert.That(Planner(Renderers[a])(viewer, 1, out _), Is.EqualTo(expected));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    [TestCase(3)]
+    public void UnsupportedViewDoesNotClaimEmptyCoverage(int scenario)
+    {
+        Matrix4x4 view = viewer.worldToCameraMatrix;
+        if (scenario == 0) view.m00 = 0;
+        if (scenario == 1) view.m00 = 1e-8f;
+        if (scenario == 2) view.m00 = -1;
+        if (scenario == 3) view.m30 = 0.1f;
+        viewer.worldToCameraMatrix = view;
+        Assert.That(Planner(Renderers[a])(viewer, 3, out _), Is.EqualTo(3));
+    }
+
+    [Test]
+    public void NonfiniteRelativeViewIsUnsupportedBeforeCameraAssignment()
+    {
+        Matrix4x4 view = viewer.worldToCameraMatrix;
+        view.m01 = float.NaN;
+        MethodInfo supported = typeof(PortalRenderer).GetMethod("SupportedRelativeView",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.That((bool)supported.Invoke(null, new object[] { view }), Is.False);
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    public void UnsupportedRenderingConventionRetainsPrefix(int scenario)
+    {
+        Component data = viewer.GetComponent(FindType("UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData"));
+        FieldInfo inverted = data.GetType().GetField("invertFaceCulling");
+        FieldInfo relative = FindType("UnityEngine.Rendering.HighDefinition.ShaderConfig")
+            .GetField("s_CameraRelativeRendering", BindingFlags.Public | BindingFlags.Static);
+        bool previousGl = GL.invertCulling, previousCamera = (bool)inverted.GetValue(data);
+        int previousRelative = (int)relative.GetValue(null);
+        try
+        {
+            if (scenario == 0) GL.invertCulling = true;
+            if (scenario == 1) inverted.SetValue(data, true);
+            if (scenario == 2) relative.SetValue(null, 0);
+            Assert.That(Planner(Renderers[a])(viewer, 3, out _), Is.EqualTo(3));
+        }
+        finally
+        {
+            GL.invertCulling = previousGl;
+            inverted.SetValue(data, previousCamera);
+            relative.SetValue(null, previousRelative);
+        }
+    }
+
+    [TestCase(15f, 1)]
+    [TestCase(30f, 0)]
+    public void CameraRelativeFarDepthFollowsViewNotTransformForward(float distance, int expected)
+    {
+        viewer.farClipPlane = 10;
+        Quaternion direction = Quaternion.Euler(0, 90, 0);
+        Matrix4x4 view = Matrix4x4.Scale(new Vector3(1, 1, -0.5f))
+            * Matrix4x4.Rotate(direction).transpose;
+        view.SetColumn(3, new Vector4(300, 400, 500, 1));
+        viewer.worldToCameraMatrix = view;
+        a.transform.SetPositionAndRotation(direction * new Vector3(0, 0, distance),
+            direction * Quaternion.Euler(0, 180, 0));
+        Assert.That(Planner(Renderers[a])(viewer, 1, out _), Is.EqualTo(expected));
     }
 
     [TestCase(0, 1)]

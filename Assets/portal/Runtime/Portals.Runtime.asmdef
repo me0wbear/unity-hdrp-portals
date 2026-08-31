@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "Unity.RenderPipelines.HighDefinition.Runtime",
+        "Unity.RenderPipelines.HighDefinition.Config.Runtime",
         "Unity.RenderPipelines.Core.Runtime"
     ],
     "includePlatforms": [],
