@@ -186,11 +186,25 @@ executions; execution evidence — CPU `ProfilerRecorderSample.Count`, пров�
 против `Recorder.sampleBlockCount`. Empty CPU recorder допускает zero только при
 валидном включённом CPU sampler с zero blocks; disagreement делает assertion unavailable.
 Для доказательства отсутствия AOV нужны все360 frame readings, не частичная выборка.
+Перед каждым интервалом recorders получают `Reset()` и `Start()`: Reset останавливает
+native collection, хотя Valid остаётся true. Reader требует IsRunning и Count>0,
+читает GetSample, не LastValue. Реальные CPU marker tests проверяют 1/0/3/1 scopes
+через frame boundaries и повторяют последовательность в следующем режиме.
 GPU recorder `HDRenderPipelineRenderAOV` использует GpuRecorder и ns→ms; его sample.Count
-также сохраняется. `gpuFrameTime` не называется полной стоимостью портального GPU render.
+также сохраняется. Это свежие arrivals после Reset/Start, не время текущего render frame.
+`read_frame` — кадр наблюдения; `gpu_source_frame=null`, исходный mode тоже неизвестен:
+API не предоставляет source-frame ID. GPU median/p95 группируют arrivals по окну чтения,
+но не сертифицируют GPU cost режима. Reset может отбросить pending GPU samples;
+полнота GPU выборки и latency не доказаны. Нулевой Count остаётся null, а не старым LastValue.
+`gpuFrameTime` не называется полной стоимостью портального GPU render.
 Смысл count описан в [Unity ProfilerRecorderSample.Count](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Unity.Profiling.ProfilerRecorderSample.Count.html).
 Отсутствующий aggregate Draw Calls Count не заменяется суммой несопоставимых counters;
-доступные имена/единицы остаются в `available-counters.txt`.
+доступные имена/category/unit/data type/flags остаются в `available-counters.txt`.
+Это отфильтрованная inventory, не полный список Unity counters. `round*/<mode>-counters.txt`
+содержит до warmup и после sampling Valid/IsRunning/Count/Capacity/WrappedAround,
+поддержку GPU recorder, включение legacy sampler и причины отсутствующих samples.
+Native GPU acceptance выполняется в реальном Development Player с HDRP AOV;
+batch Editor fixture без фактически отрисованных SRP frames не доказывает GPU regression.
 
 PNG depth2/depth0 снимаются после timed loop в обоих раундах. Опубликованный ROI
 сверху слева `(865,420,190,290)` переводится в Texture2D `(865,370,190,290)`:

@@ -57,7 +57,11 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             + "An untimed enabled-mode setup frame permits lazy marker registration; discovery/storage/I/O precede all warmup frames.\n"
             + "CPU AOV execution evidence: ProfilerRecorderSample.Count, cross-checked against Recorder.sampleBlockCount.\n"
             + "Empty CPU recorder only yields measured zero when a valid enabled CPU sampler reports zero blocks. Otherwise null.\n"
-            + "GPU AOV: GpuRecorder HDRenderPipelineRenderAOV ns/1000000; gpuFrameTime is not total portal GPU cost.\n"
+            + "Recorders use Reset then Start before each frame; Read requires running collection and a new stored sample, never LastValue.\n"
+            + "GPU AOV: fresh arrivals since Reset/Start, HDRenderPipelineRenderAOV ns/1000000. Source render frame/mode is unknown.\n"
+            + "GPU summaries group arrivals by observation window only; reset may discard pending GPU samples, so completeness is unproved.\n"
+            + "No GPU latency is assumed; neither AOV arrivals nor gpuFrameTime represent total portal GPU cost.\n"
+            + "Missing aggregate Draw Calls Count stays null; available-counters.txt is a filtered inventory, not all Unity counters.\n"
             + "Published top-left ROI=(865,420,190,290); Texture2D bottom-left=(865,370,190,290).\n");
         for (int round = 0; round < 2; round++)
         {
@@ -105,6 +109,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         var executions = new List<double>(SampleFrames);
         var raw = new RawFrame[SampleFrames];
         bool executionDisagreement = false;
+        string countersBeforeWarmup = CounterSnapshot();
         int setupCompletedFrame = Time.frameCount;
         for (int i = 0; i < WarmupFrames; i++) { FrameTimingManager.CaptureFrameTimings(); yield return null; }
         if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0) previousTimestamp = timingBuffer[0].frameStartTimestamp;
@@ -118,7 +123,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             // Здесь нет discovery, сериализации, PNG, ReadPixels, EncodePNG и дискового I/O.
             frames[i] = Time.unscaledDeltaTime * 1000.0;
             callbackSamples[i] = callbacks;
-            RawFrame row = new RawFrame { frame = i, frameMs = frames[i], callbacks = callbacks };
+            RawFrame row = new RawFrame { frame = i, readFrame = Time.frameCount, frameMs = frames[i], callbacks = callbacks };
             row.draw = Read(draws, false, out row.drawCount);
             row.setPass = Read(setPass, false, out row.setPassCount);
             row.aovGpuMs = Read(aovGpu, true, out row.aovGpuCount);
@@ -160,6 +165,9 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             + "; frameTimingEnabled=" + FrameTimingManager.IsFeatureEnabled() + "; executionCounterDisagreement=" + executionDisagreement + "\n");
         context.Save(prefix + "-window.txt", "setupCompletedFrame=" + setupCompletedFrame + "; samplingStartFrame=" + samplingStartFrame
             + "; samplingEndFrame=" + samplingEndFrame + "; warmupFrames=" + WarmupFrames + "; retainedSamples=" + frames.Length + "\n");
+        context.Save(prefix + "-counters.txt", "beforeWarmup:\n" + countersBeforeWarmup + "afterSampling:\n" + CounterSnapshot()
+            + "GPU source render frame/mode: unavailable; API provides no source frame ID. read_frame is arrival observation only.\n"
+            + "CPU disagreement=" + executionDisagreement + "; raw recorder count and sampler blocks are retained independently.\n");
         context.Save(prefix + "-samples.csv", RawCsv(raw));
         string summary = round + "," + mode + "," + frames.Length + "," + F(sample.frameMedianMs) + "," + F(PortalPerformanceMetrics.Percentile(frames, 0.95))
             + Stats(gpu) + Stats(cpu) + Stats(main) + Stats(render) + Stats(drawValues) + Stats(passValues) + Stats(aovValues)
@@ -195,7 +203,8 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             ProfilerRecorderDescription description = ProfilerRecorderHandle.GetDescription(handle);
             if (description.Name.Contains("Draw Calls") || description.Name == "SetPass Calls Count" || description.Name == "HDRenderPipelineRenderAOV")
             {
-                string label = description.Category.Name + ":" + description.Name + " unit=" + description.UnitType;
+                string label = description.Category.Name + ":" + description.Name + " unit=" + description.UnitType
+                    + " data=" + description.DataType + " flags=" + description.Flags;
                 if (discovered.Add(label)) Debug.Log("[PerformanceCounter] " + label);
             }
             if (description.Name == "Draw Calls Count" && !draws.Valid) draws = Start(description, false);
@@ -218,15 +227,35 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         ProfilerRecorder.StartNew(description.Category, description.Name, 1,
             ProfilerRecorderOptions.StartImmediately | ProfilerRecorderOptions.WrapAroundWhenCapacityReached
             | ProfilerRecorderOptions.SumAllSamplesInFrame | (gpu ? ProfilerRecorderOptions.GpuRecorder : (ProfilerRecorderOptions)0));
-    private static void Reset(ref ProfilerRecorder recorder) { if (recorder.Valid) recorder.Reset(); }
+    private static void Reset(ref ProfilerRecorder recorder)
+    {
+        if (!recorder.Valid) return;
+        // Reset очищает samples и останавливает native collection; Valid не означает IsRunning.
+        recorder.Reset();
+        recorder.Start();
+    }
     private static double? Read(ProfilerRecorder recorder, bool nanoseconds, out double? count)
     {
         count = null;
-        if (!recorder.Valid || recorder.Count == 0) return null;
+        if (!recorder.Valid || !recorder.IsRunning || recorder.Count == 0) return null;
         ProfilerRecorderSample sample = recorder.GetSample(recorder.Count - 1);
         if (sample.Value < 0 || sample.Count < 0) return null;
         count = sample.Count;
         return nanoseconds ? PortalPerformanceMetrics.NanosecondsToMilliseconds(sample.Value) : sample.Value;
+    }
+    private string CounterSnapshot() => "supportsGpuRecorder=" + SystemInfo.supportsGpuRecorder + "\n"
+        + "draw: " + CounterState(draws) + "\nsetPass: " + CounterState(setPass)
+        + "\naovCpu: " + CounterState(aovCpu) + "\naovGpu: " + CounterState(aovGpu)
+        + "\naovSamplerValid=" + (aovSampler != null && aovSampler.isValid)
+        + "; enabled=" + (aovSampler != null && aovSampler.isValid && aovSampler.enabled) + "\n";
+
+    private static string CounterState(ProfilerRecorder recorder)
+    {
+        if (!recorder.Valid) return "Valid=false; unavailable=exact marker not registered or recorder unsupported";
+        string reason = !recorder.IsRunning ? "collection stopped" : recorder.Count == 0 ? "no sample arrived since reset" : "none";
+        return "Valid=true; IsRunning=" + recorder.IsRunning + "; Count=" + recorder.Count + "; Capacity=" + recorder.Capacity
+            + "; WrappedAround=" + recorder.WrappedAround + "; unit=" + recorder.UnitType + "; data=" + recorder.DataType
+            + "; unavailable=" + reason;
     }
     private static double? Positive(double value) => PortalCheckPolicy.Finite(value) && value > 0 ? value : (double?)null;
     private static void Add(List<double> values, double? value) { if (value.HasValue) values.Add(value.Value); }
@@ -253,7 +282,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
 
     private struct RawFrame
     {
-        public int frame, callbacks;
+        public int frame, readFrame, callbacks;
         public ulong timestamp;
         public double frameMs;
         public double? draw, drawCount, setPass, setPassCount, aovGpuMs, aovGpuCount, aovExecutions, cpuRecorderCount, cpuSamplerBlocks;
@@ -262,13 +291,14 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
 
     private static string RawCsv(RawFrame[] frames)
     {
-        var csv = new StringBuilder("frame,unscaled_delta_ms,timing_timestamp,gpu_ms,cpu_ms,main_ms,render_ms,draw_value,draw_count,setpass_value,setpass_count,aov_gpu_ms,aov_gpu_count,aov_executions,cpu_aov_recorder_count,cpu_aov_sampler_blocks,begin_camera_callbacks\n");
+        var csv = new StringBuilder("frame,unscaled_delta_ms,timing_timestamp,gpu_ms,cpu_ms,main_ms,render_ms,draw_value,draw_count,setpass_value,setpass_count,aov_gpu_ms,aov_gpu_count,aov_executions,cpu_aov_recorder_count,cpu_aov_sampler_blocks,begin_camera_callbacks,read_frame,gpu_source_frame\n");
         foreach (RawFrame row in frames)
             csv.Append(row.frame).Append(',').Append(F(row.frameMs)).Append(',').Append(row.timestamp == 0 ? "null" : row.timestamp.ToString(CultureInfo.InvariantCulture)).Append(',')
                 .Append(F(row.gpu)).Append(',').Append(F(row.cpu)).Append(',').Append(F(row.main)).Append(',').Append(F(row.render)).Append(',')
                 .Append(F(row.draw)).Append(',').Append(F(row.drawCount)).Append(',').Append(F(row.setPass)).Append(',').Append(F(row.setPassCount)).Append(',')
                 .Append(F(row.aovGpuMs)).Append(',').Append(F(row.aovGpuCount)).Append(',').Append(F(row.aovExecutions)).Append(',')
-                .Append(F(row.cpuRecorderCount)).Append(',').Append(F(row.cpuSamplerBlocks)).Append(',').Append(row.callbacks).Append('\n');
+                .Append(F(row.cpuRecorderCount)).Append(',').Append(F(row.cpuSamplerBlocks)).Append(',').Append(row.callbacks).Append(',')
+                .Append(row.readFrame).Append(",null\n");
         return csv.ToString();
     }
 
