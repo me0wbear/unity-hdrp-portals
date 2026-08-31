@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `restrictViewToOpening`: virtual cameras render only the screen rectangle the
+  opening occupies, at unchanged pixel density. HDRP's resolution-dependent
+  passes and per-level culling are paid per opening area; on the sandbox probe a
+  visible portal falls from 4.4-5.1 ms to about 1.5 ms across this and the two
+  changes below.
+- `screenSpaceEffectsInView`: ambient occlusion, screen space reflections and
+  global illumination, and contact shadows are off on virtual cameras by
+  default. HDRP linearises depth with a formula that is wrong for their oblique
+  projection, and the occlusion it computed there was the measured cause of the
+  contrast change at a crossing.
+- `fadeOcclusionNearCrossing`: the main camera's ambient occlusion fades within
+  the blend distance of an opening, so the frames on both sides of a teleport
+  carry matching occlusion instead of a visible cut.
+
+### Changed
+
+- Content depth is copied from the frame the level-zero camera already
+  rendered. The AOV request it replaces made HDRP execute a second complete
+  render of that camera every frame.
+- Recursion levels whose quads are invisible from their parent level's camera
+  are no longer rendered; in the sandbox the deeper levels changed no pixel.
+- The motion vector prepass is skipped on virtual cameras: nothing consumes its
+  output while post-processing and screen space effects are off there.
+
 ### Fixed
 
 - Reconstruct portal content depth with the inverse GPU projection, matching
