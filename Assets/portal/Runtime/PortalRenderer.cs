@@ -141,6 +141,18 @@ public sealed class PortalRenderer
                 // должны совпадать с проекцией, использованной при рендере в RT.
                 ContentInverseProjection = GL.GetGPUProjectionMatrix(camera.projectionMatrix, true).inverse;
             }
+
+            // Уровень глубже рисовать имеет смысл, только если из этой камеры
+            // виден хотя бы один квад, на котором появится его результат. При
+            // рабочем косом отсечении квад выхода срезан самой проекцией, а квад
+            // входа попадает в кадр, лишь когда пара стоит лицом к лицу. Если не
+            // виден ни один, рекурсия заканчивается здесь: более глубокие камеры
+            // выключаются и бюджета системы не занимают, хотя сцена этого уровня
+            // без них не отличается ни одним пикселем.
+            if (_portal.cullWhenOffscreen && level + 1 < _levels && !DeeperLevelVisible(camera))
+            {
+                _levels = level + 1;
+            }
         }
     }
 
@@ -425,6 +437,47 @@ public sealed class PortalRenderer
 
         Plane[] planes = GeometryUtility.CalculateFrustumPlanes(viewer);
         return GeometryUtility.TestPlanesAABB(planes, _portal.screen.bounds);
+    }
+
+    /// <summary>
+    /// Буфер плоскостей пирамиды видимости для проверки уровней. Один на рендер
+    /// и переиспользуется, чтобы не выделять массив на каждый уровень каждый кадр.
+    /// </summary>
+    private readonly Plane[] _levelPlanes = new Plane[6];
+
+    /// <summary>
+    /// Виден ли из камеры уровня хотя бы один квад, на котором появится
+    /// результат более глубокого уровня. Содержимое следующего уровня кладётся
+    /// на квады обоих порталов пары (см. <see cref="OnBeginCameraRendering"/>),
+    /// поэтому проверяются оба.
+    /// </summary>
+    private bool DeeperLevelVisible(Camera levelCamera)
+    {
+        GeometryUtility.CalculateFrustumPlanes(levelCamera, _levelPlanes);
+
+        return QuadVisible(_portal, levelCamera, _levelPlanes)
+            || QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes);
+    }
+
+    /// <summary>
+    /// Квад портала стоит лицом к камере уровня и попадает в её пирамиду
+    /// видимости. Пирамида считается по текущей матрице проекции, то есть с
+    /// косой ближней плоскостью: квад выхода, срезанный ею, отсеивается здесь
+    /// сам, а вблизи перехода, когда косое отсечение выключено, остаётся видимым.
+    /// </summary>
+    private static bool QuadVisible(Portal portal, Camera levelCamera, Plane[] planes)
+    {
+        if (portal == null || portal.screen == null)
+        {
+            return false;
+        }
+
+        if (PortalMath.SignedDistance(portal.transform, levelCamera.transform.position) <= 0f)
+        {
+            return false;
+        }
+
+        return GeometryUtility.TestPlanesAABB(planes, portal.screen.bounds);
     }
 
     private void EnsureCapacity(int levels, Camera viewer)
