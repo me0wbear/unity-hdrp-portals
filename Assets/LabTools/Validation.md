@@ -128,7 +128,7 @@ max channel difference≤2. Остальные режимы, TAA и direct-repea
 
 Отдельный leakage control выполняется на 1 м от портала после исходных ROI кадров.
 Marker ставится между mapped eye и exit plane по пересечению луча, без выбора знака оси.
-HDRP Unlit emission `(8192,0,8192)` рассчитан на яркий маркер при EV11, но его наличие
+HDRP Unlit emission `(2048,0,2048)`, exposureWeight=1 рассчитан на маркер при EV11, но его наличие
 доказывается пикселями, не параметром material. Сначала normal oblique должен скрыть
 marker, затем regular projection обязан показать его. Classifier: R/B≥128,G≤96,
 R−G/B−G≥64; существующие magenta pixels исключаются по background соответствующей проекции.
@@ -142,11 +142,17 @@ Portal binding после штатных main-camera callbacks. Текущие d
 свойства сохраняются; baseline/oblique и чужие камеры не изменяются. Подписка
 переподключается в LateUpdate(2000) после PortalSystem(1000), включая пересоздание камер.
 `*-projection-audit.json` у regular through/positive/background captures и общий
-`projection-audit.json` содержат observed main bindings, последний frame, root/portal,
+`projection-audit.json` содержат observed main bindings, отдельные count/frame обязательного entrance, root/portal,
 depth name, expected/bound GPU inverse и максимальную поэлементную ошибку.
 В конце capture frame binding перечитывается без исправления: ошибка >1e-5,
-неоднозначный root, отсутствующий depth или отсутствие main binding в текущем кадре
+неоднозначный root, отсутствующий depth или отсутствие нового entrance binding в текущем кадре
 делают fixture Blocked. Этот runtime audit дополняет, но не заменяет реальные Player captures.
+Аудит выбирает contributors через публичный `PortalSystem.HasContentBuffers`, как production
+content-depth composite. Offscreen/suspended exit с borrowed/cached ViewTexture не считается
+собственным root render и не изменяется. У настоящего contributor отсутствие или неоднозначность
+root остаются ошибкой; binding другого портала не заменяет обязательный entrance.
+Строгий classifier выше не ослабляется. Реальный Player должен доказать regularPixels>0
+и obliquePixels=0; это не исправление production и не отмена baseline gate.
 Все данные сохраняются и при Failed. Один финальный PortalCheckResult идёт после всех
 режимов/control; runtime exceptions и watchdog по-прежнему обрабатываются общим контрактом.
 Заморозка Rigidbody/отключение движения ограничены диагностическим Player; shared profiles

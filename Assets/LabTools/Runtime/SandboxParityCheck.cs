@@ -29,6 +29,7 @@ public sealed class SandboxParityCheck : MonoBehaviour
     private sealed class ProjectionAudit
     {
         public int mainBindings, lastBindingFrame;
+        public int entranceBindings, lastEntranceBindingFrame;
         public float maxElementError;
         public string portal, rootCamera, depthTexture, failureReason = string.Empty;
         public Matrix4x4 expectedInverse, boundInverse;
@@ -81,7 +82,7 @@ public sealed class SandboxParityCheck : MonoBehaviour
                 samples.Add(sample);
                 string prefix = mode + "/" + aa;
                 Color32[] through = null, settled = null, repeated = null;
-                int bindingsBefore = projectionAudit.mainBindings;
+                int bindingsBefore = projectionAudit.entranceBindings;
                 context.SetEye(eye, rotation, true);
                 yield return SandboxProbeContext.Settle(120);
                 yield return context.Capture(prefix + "-through", roi, pixels => { through = pixels; Captured(sample, pixels, true); });
@@ -156,16 +157,21 @@ public sealed class SandboxParityCheck : MonoBehaviour
         ObserveProjectionBindings(true);
     }
 
-    private int ObserveProjectionBindings(bool synchronize)
+    private bool ObserveProjectionBindings(bool synchronize)
     {
         projectionBlock ??= new MaterialPropertyBlock();
-        int observed = 0;
+        bool entranceObserved = false;
         Camera[] cameras = Camera.allCameras;
         foreach (Portal portal in context.Portals)
         {
-            if (portal == null || !portal.gameObject.activeInHierarchy || portal.playerCamera != context.Main || portal.ViewTexture == null) continue;
+            if (portal == null || !portal.gameObject.activeInHierarchy || portal.playerCamera != context.Main) continue;
+            // A paired offscreen/suspended screen may retain a borrowed recursion target.
+            // Use the same public contributor predicate as the content-depth composite.
+            if (!PortalSystem.HasContentBuffers(portal)) continue;
             if (portal.screen == null || !portal.writeContentDepth)
             { ProjectionFailure("Regular projection requires the existing screen and content-depth binding."); continue; }
+            if (portal.ViewTexture == null)
+            { ProjectionFailure("Regular contributor has no bound root view texture."); continue; }
             Camera root = null;
             int matches = 0;
             foreach (Camera camera in cameras)
@@ -191,7 +197,7 @@ public sealed class SandboxParityCheck : MonoBehaviour
             for (int i = 0; i < 16; i++)
             {
                 if (!PortalCheckPolicy.Finite(expected[i]) || !PortalCheckPolicy.Finite(bound[i]))
-                { ProjectionFailure("Consumed regular inverse contains non-finite values."); return observed; }
+                { ProjectionFailure("Consumed regular inverse contains non-finite values."); return false; }
                 error = Mathf.Max(error, Mathf.Abs(expected[i] - bound[i]));
             }
             projectionAudit.maxElementError = Mathf.Max(projectionAudit.maxElementError, error);
@@ -202,14 +208,19 @@ public sealed class SandboxParityCheck : MonoBehaviour
             projectionAudit.boundInverse = bound;
             if (error > 0.00001f || projectionBlock.GetTexture(ContentDepthId) != depth)
             { ProjectionFailure("Consumed regular inverse or content-depth texture differs from the virtual camera binding."); continue; }
-            observed++;
+            if (portal == entrance) entranceObserved = true;
             if (synchronize)
             {
                 projectionAudit.mainBindings++;
                 projectionAudit.lastBindingFrame = Time.frameCount;
+                if (portal == entrance)
+                {
+                    projectionAudit.entranceBindings++;
+                    projectionAudit.lastEntranceBindingFrame = Time.frameCount;
+                }
             }
         }
-        return observed;
+        return entranceObserved;
     }
 
     private void ProjectionFailure(string reason)
@@ -222,9 +233,9 @@ public sealed class SandboxParityCheck : MonoBehaviour
     {
         if (!regularProjection) return;
         // Capture runs at end of frame: re-read, do not repair a later overwrite.
-        if (ObserveProjectionBindings(false) == 0 || projectionAudit.mainBindings <= bindingsBefore
-            || projectionAudit.lastBindingFrame != Time.frameCount)
-            ProjectionFailure("Regular capture has no demonstrated synchronized main-camera binding.");
+        if (!ObserveProjectionBindings(false) || projectionAudit.entranceBindings <= bindingsBefore
+            || projectionAudit.lastEntranceBindingFrame != Time.frameCount || projectionAudit.lastBindingFrame != Time.frameCount)
+            ProjectionFailure("Regular capture has no demonstrated synchronized entrance binding in the current main-camera frame.");
         context.Save(name + "-projection-audit.json", JsonUtility.ToJson(projectionAudit, true));
     }
 
@@ -257,23 +268,23 @@ public sealed class SandboxParityCheck : MonoBehaviour
         // Яркость учитывает EV11: виртуальная камера отдаёт непреэкспонированное содержимое.
         markerMaterial = new Material(leakageShader) { name = "SandboxParityOwnedEmissive" };
         markerMaterial.SetColor("_UnlitColor", Color.black);
-        markerMaterial.SetColor("_EmissiveColor", new Color(8192, 0, 8192, 1));
+        markerMaterial.SetColor("_EmissiveColor", new Color(2048, 0, 2048, 1));
         markerMaterial.SetColor("_EmissiveColorLDR", Color.magenta);
         markerMaterial.SetFloat("_EmissiveExposureWeight", 1);
         marker.GetComponent<Renderer>().sharedMaterial = markerMaterial;
-        context.Save("leakage/fixture.txt", "Separate 1m standoff control; emission RGB=(8192,0,8192), exposureWeight=1.\n"
+        context.Save("leakage/fixture.txt", "Separate 1m standoff control; emission RGB=(2048,0,2048), exposureWeight=1.\n"
             + "Classifier: r,b>=128; g<=96; r-g,b-g>=64; exclude magenta in projection-matched background.\n"
             + "Mapped eye=" + mapped.ToString("F6") + "; marker=" + position.ToString("F6") + "\n");
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/oblique-marker", null, pixels => oblique = pixels);
         regularProjection = true;
-        int bindingsBefore = projectionAudit.mainBindings;
+        int bindingsBefore = projectionAudit.entranceBindings;
         PortalSystem.ResetHistory();
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/regular-positive-marker", null, pixels => regular = pixels);
         SaveProjectionAudit("leakage/regular-positive-marker", bindingsBefore);
         marker.SetActive(false);
-        bindingsBefore = projectionAudit.mainBindings;
+        bindingsBefore = projectionAudit.entranceBindings;
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/background-regular", null, pixels => backgroundRegular = pixels);
         SaveProjectionAudit("leakage/background-regular", bindingsBefore);

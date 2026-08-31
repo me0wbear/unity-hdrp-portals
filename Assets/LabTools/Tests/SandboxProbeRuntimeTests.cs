@@ -5,8 +5,11 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.TestTools;
 
 namespace Portals.Lab.Tests
 {
@@ -15,7 +18,7 @@ namespace Portals.Lab.Tests
         private const BindingFlags Members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private readonly List<UnityEngine.Object> owned = new List<UnityEngine.Object>();
         private Camera main, root;
-        private Component portal, run, probe;
+        private Component portal, paired, system, run, probe;
         private object context;
         private MeshRenderer screen;
         private RenderTexture view, depth;
@@ -44,9 +47,12 @@ namespace Portals.Lab.Tests
             return go;
         }
 
-        [SetUp]
-        public void SetUp()
+        [UnitySetUp]
+        public IEnumerator SetUp()
         {
+            if (!Application.isBatchMode) Assert.Ignore("Requires an isolated batchmode Editor.");
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            yield return new EnterPlayMode();
             output = Path.GetFullPath(Path.Combine(Application.dataPath, "../Logs/task0c-fixture-" + Guid.NewGuid().ToString("N")));
             main = Host("ProbeMain").AddComponent<Camera>();
             main.gameObject.AddComponent(LabSerializationTests.FindType("UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData"));
@@ -69,28 +75,32 @@ namespace Portals.Lab.Tests
 
         private void ParityFixture()
         {
-            GameObject host = Host("ProbePortal");
-            host.SetActive(false);
-            portal = host.AddComponent(LabSerializationTests.FindType("Portal"));
-            ((Behaviour)portal).enabled = false; // No global registry or production resource ownership in this fixture.
-            host.SetActive(true);
-            screen = host.AddComponent<MeshRenderer>();
-            Set(portal, "screen", screen);
-            Set(portal, "playerCamera", main);
-            Array portals = Array.CreateInstance(portal.GetType(), 1);
-            portals.SetValue(portal, 0);
-            Set(context, "Portals", portals);
-            root = Host("RootVirtual").AddComponent<Camera>();
-            root.transform.SetParent(host.transform);
-            view = new RenderTexture(32, 32, 0); owned.Add(view);
-            depth = new RenderTexture(32, 32, 0); owned.Add(depth);
-            Assert.That(view.Create(), Is.True);
-            Assert.That(depth.Create(), Is.True);
-            root.targetTexture = view;
-            cachedInverse = GL.GetGPUProjectionMatrix(root.CalculateObliqueMatrix(new Vector4(0, 0, -1, -2)), true).inverse;
+            main.transform.SetPositionAndRotation(new Vector3(0, 0, 2), Quaternion.Euler(0, 180, 0));
+            portal = CreatePortal("ProbePortal", Vector3.zero);
+            paired = CreatePortal("PairedExit", new Vector3(40, 0, 0));
+            Set(portal, "exitPortal", paired);
+            Set(paired, "exitPortal", portal);
+            portal.gameObject.SetActive(true);
+            paired.gameObject.SetActive(true);
+            system = GameObject.Find("PortalSystem").GetComponent(LabSerializationTests.FindType("PortalSystem"));
+            Call(system, "LateUpdate");
+            Assert.That(HasContentBuffers(portal), Is.True, "Entrance must be a real composite contributor.");
+            Assert.That(HasContentBuffers(paired), Is.False, "Offscreen paired exit must not own active content.");
+            screen = (MeshRenderer)Field(portal, "screen");
+            ContextPortals(portal);
+            root = Array.Find(portal.GetComponentsInChildren<Camera>(true), camera => camera.name.EndsWith("_Camera_0"));
+            Assert.That(root, Is.Not.Null);
+            view = root.targetTexture;
+            CameraEvent.Raise(main);
             var block = new MaterialPropertyBlock();
+            screen.GetPropertyBlock(block);
+            depth = (RenderTexture)block.GetTexture(DepthId);
+            Assert.That(depth, Is.Not.Null);
+            cachedInverse = block.GetMatrix(InverseId);
             block.SetFloat(SentinelId, 37);
             screen.SetPropertyBlock(block);
+            // A controllable producer exercises callback re-registration and stale inverse repair.
+            // Contributor membership and resource allocation still come from the real PortalSystem.
             rendererBinding = (renderContext, camera) =>
             {
                 if (camera != main) return;
@@ -99,8 +109,36 @@ namespace Portals.Lab.Tests
             };
             RenderPipelineManager.beginCameraRendering += rendererBinding;
             AddProbe("SandboxParityCheck");
+            Set(probe, "entrance", portal);
             Set(probe, "mode", "regular-projection");
             Set(probe, "regularProjection", true);
+        }
+
+        private Component CreatePortal(string name, Vector3 position)
+        {
+            GameObject host = Host(name);
+            host.SetActive(false);
+            host.transform.position = position;
+            Component result = host.AddComponent(LabSerializationTests.FindType("Portal"));
+            GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.transform.SetParent(host.transform, false);
+            UnityEngine.Object.Destroy(quad.GetComponent<Collider>());
+            var renderer = quad.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/portal/PortalScreenMat.mat");
+            Set(result, "screen", renderer);
+            Set(result, "playerCamera", main);
+            Set(result, "resolutionDivider", 64);
+            return result;
+        }
+
+        private static bool HasContentBuffers(Component candidate) => (bool)LabSerializationTests.FindType("PortalSystem")
+            .GetMethod("HasContentBuffers").Invoke(null, new object[] { candidate });
+
+        private void ContextPortals(params Component[] candidates)
+        {
+            Array portals = Array.CreateInstance(LabSerializationTests.FindType("Portal"), candidates.Length);
+            for (int i = 0; i < candidates.Length; i++) portals.SetValue(candidates[i], i);
+            Set(context, "Portals", portals);
         }
 
         private void AddProbe(string name)
@@ -187,7 +225,7 @@ namespace Portals.Lab.Tests
             Set(probe, "mode", foreign ? "regular-projection" : "baseline");
             rendererBinding(default, main);
             Call(probe, "LateUpdate");
-            CameraEvent.Raise(foreign ? root : main);
+            CameraEvent.Raise(foreign ? Host("ForeignCamera").AddComponent<Camera>() : main);
             MatrixEquals(BoundInverse(), cachedInverse);
         }
 
@@ -210,7 +248,7 @@ namespace Portals.Lab.Tests
             Call(probe, "LateUpdate");
             CameraEvent.Raise(main);
             Call(probe, "SaveProjectionAudit", "valid", 0);
-            Assert.That(File.ReadAllText(Path.Combine(output, "valid-projection-audit.json")), Does.Contain("RootVirtual"));
+            Assert.That(File.ReadAllText(Path.Combine(output, "valid-projection-audit.json")), Does.Contain(root.name));
             Assert.That((string)Field(context, "Problem"), Is.Empty);
             Call(portal, "SetContentBuffers", depth, cachedInverse);
             Call(probe, "SaveProjectionAudit", "corrupt", 0);
@@ -257,6 +295,79 @@ namespace Portals.Lab.Tests
             Assert.That((string)Field(context, "Problem"), Is.Not.Empty);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PairedOffscreenExitDoesNotInvalidateTheEntranceBinding(bool previouslyAllocated)
+        {
+            ParityFixture();
+            ContextPortals(portal, paired);
+            if (previouslyAllocated)
+            {
+                Set(paired, "cullWhenOffscreen", false);
+                Call(system, "LateUpdate");
+                Assert.That(HasContentBuffers(paired), Is.True);
+                Set(paired, "cullWhenOffscreen", true);
+                Call(system, "LateUpdate");
+            }
+            Assert.That(HasContentBuffers(paired), Is.False);
+            Call(probe, "LateUpdate");
+            CameraEvent.Raise(root); // Production gives the exit a borrowed recursion texture.
+            Assert.That(paired.GetType().GetProperty("ViewTexture").GetValue(paired), Is.Not.Null);
+            CameraEvent.Raise(main);
+            Call(probe, "SaveProjectionAudit", "paired", 0);
+            MatrixEquals(BoundInverse(), GL.GetGPUProjectionMatrix(root.projectionMatrix, true).inverse);
+            Assert.That((string)Field(context, "Problem"), Is.Empty);
+            Assert.That(Field(Field(probe, "projectionAudit"), "mainBindings"), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ReactivatedPairedContributorWithMissingRootStillBlocks()
+        {
+            ParityFixture();
+            ContextPortals(portal, paired);
+            Set(paired, "cullWhenOffscreen", false);
+            Call(system, "LateUpdate");
+            Set(paired, "cullWhenOffscreen", true);
+            Call(system, "LateUpdate");
+            Assert.That(HasContentBuffers(paired), Is.False);
+            Set(paired, "cullWhenOffscreen", false);
+            Call(system, "LateUpdate");
+            Assert.That(HasContentBuffers(paired), Is.True);
+            Camera pairedRoot = Array.Find(paired.GetComponentsInChildren<Camera>(true), camera => camera.name.EndsWith("_Camera_0"));
+            pairedRoot.targetTexture = null;
+            Call(probe, "LateUpdate");
+            CameraEvent.Raise(main);
+            Assert.That((string)Field(context, "Problem"), Is.Not.Empty);
+        }
+
+        [Test]
+        public void AnotherContributorsBindingCannotSubstituteForTheRequiredEntrance()
+        {
+            ParityFixture();
+            Set(probe, "entrance", paired);
+            Call(probe, "LateUpdate");
+            CameraEvent.Raise(main);
+            Assert.That(Field(Field(probe, "projectionAudit"), "mainBindings"), Is.EqualTo(1));
+            Call(probe, "SaveProjectionAudit", "wrong-entrance", 0);
+            Assert.That((string)Field(context, "Problem"), Is.Not.Empty);
+        }
+
+        [Test]
+        public void OtherContributorCannotSatisfyTheRequiredEntrancesNewBindingCount()
+        {
+            ParityFixture();
+            ContextPortals(portal, paired);
+            Set(paired, "cullWhenOffscreen", false);
+            Call(system, "LateUpdate");
+            Call(probe, "LateUpdate");
+            CameraEvent.Raise(main);
+            Assert.That((string)Field(context, "Problem"), Is.Empty);
+            // One required-entrance binding already existed before the capture interval.
+            // The other portal's binding must not make that count look fresh.
+            Call(probe, "SaveProjectionAudit", "no-new-entrance-binding", 1);
+            Assert.That((string)Field(context, "Problem"), Is.Not.Empty);
+        }
+
         [Test]
         public void PerformanceSetupPrecedes180WarmupAnd360RetainedSamples()
         {
@@ -291,19 +402,22 @@ namespace Portals.Lab.Tests
             (measure as IDisposable)?.Dispose();
         }
 
-        [TearDown]
-        public void TearDown()
+        [UnityTearDown]
+        public IEnumerator TearDown()
         {
             RenderPipelineManager.beginCameraRendering -= rendererBinding;
             // Dispose the probe before its dependencies, without requesting any Player exit.
             if (probe != null) UnityEngine.Object.DestroyImmediate(probe.gameObject);
             if (root != null) root.targetTexture = null;
             for (int i = owned.Count - 1; i >= 0; i--)
-                if (owned[i] != null) UnityEngine.Object.DestroyImmediate(owned[i]);
+                if (owned[i] != null) UnityEngine.Object.Destroy(owned[i]);
             owned.Clear();
+            // Production resources use deferred destruction; exercise their real Play Mode lifecycle.
+            yield return null;
             if (initializedVolumes) Call(volumeManager, "Deinitialize");
             initializedVolumes = false;
             if (Directory.Exists(output)) Directory.Delete(output, true);
+            yield return new ExitPlayMode();
         }
     }
 }
