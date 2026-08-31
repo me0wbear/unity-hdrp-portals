@@ -70,6 +70,17 @@ movement script is a demo, meant to be swapped for yours.
 Check your work with **Tools → Portals → Validate Scene**. It reports what each
 portal is missing, if anything.
 
+## Documentation
+
+- [`Documentation/SETUP.md`](Documentation/SETUP.md) — the full setup guide:
+  building a portal by hand, the player, clone slicing, every `Portal` field,
+  troubleshooting an empty opening.
+- [`Documentation/UHFPS.md`](Documentation/UHFPS.md) — wiring the module to a
+  UHFPS player: one menu item, the look-angle modes, the binding log, and the
+  blink on the crossing frame.
+
+Both guides are in Russian, like the source comments.
+
 ## What the components do
 
 | Component | Goes on | Job |
@@ -168,7 +179,10 @@ Read this section. It is the honest list.
 - **Sound does not pass through a portal.**
 - The UHFPS bridge is written against reflection and tested against stubs that
   copy the real class names and signatures. It has not been confirmed on the
-  actual asset.
+  actual asset — which is why it logs every member it binds and exposes the
+  look-angle handling as a selectable mode instead of hardcoding one guess.
+  Player preparation, the modes and the log are covered in
+  [`Documentation/UHFPS.md`](Documentation/UHFPS.md).
 
 ## License
 

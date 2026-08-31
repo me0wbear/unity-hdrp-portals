@@ -87,7 +87,8 @@ public static class PortalSetupTools
     /// порталы: вешает путешественника и мост камеры, находит камеру среди
     /// потомков и связывает поля. Написан ради UHFPS — его игрока модуль не
     /// может поставить префабом, потому что не ссылается на ассет, — но делает
-    /// ровно ручные шаги из SETUP.md и потому годится любому контроллеру.
+    /// ровно ручные шаги из Documentation/SETUP.md и потому годится любому
+    /// контроллеру.
     /// </summary>
     [MenuItem("Tools/Portals/Prepare UHFPS Player")]
     public static void PrepareUhfpsPlayer()

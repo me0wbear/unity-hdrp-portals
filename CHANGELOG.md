@@ -22,8 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fadeOcclusionNearCrossing`: the main camera's ambient occlusion fades within
   the blend distance of an opening, so the frames on both sides of a teleport
   carry matching occlusion instead of a visible cut.
+- UHFPS: the look-angle handling on the camera bridge is a selectable mode —
+  add the crossing yaw to the stored angle, transfer the root yaw into it per
+  the documented UHFPS invariant, or leave the angle to the asset. The adapter
+  binds members as fields and as properties, logs every member it finds and
+  warns about the ones it does not, so a silent no-op cannot masquerade as a
+  broken crossing. **Tools → Portals → Prepare UHFPS Player** wires a selected
+  player root. Described in `Documentation/UHFPS.md`.
 
 ### Changed
+
+- The setup guide moved into `Documentation/` and now ships with the
+  repository, linked from the README, together with the new UHFPS guide.
 
 - Content depth is copied from the frame the level-zero camera already
   rendered. The AOV request it replaces made HDRP execute a second complete
