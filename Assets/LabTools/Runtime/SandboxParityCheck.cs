@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using Portals.Lab.Validation;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
 
 [DefaultExecutionOrder(2000)]
@@ -19,6 +20,19 @@ public sealed class SandboxParityCheck : MonoBehaviour
     private readonly PortalLeakageControl control = new PortalLeakageControl();
     private GameObject marker;
     private Material markerMaterial;
+    private static readonly int ContentDepthId = Shader.PropertyToID("_ContentDepth");
+    private static readonly int InverseProjectionId = Shader.PropertyToID("_PortalInverseProjection");
+    private MaterialPropertyBlock projectionBlock;
+    private readonly ProjectionAudit projectionAudit = new ProjectionAudit();
+
+    [Serializable]
+    private sealed class ProjectionAudit
+    {
+        public int mainBindings, lastBindingFrame;
+        public float maxElementError;
+        public string portal, rootCamera, depthTexture, failureReason = string.Empty;
+        public Matrix4x4 expectedInverse, boundInverse;
+    }
 
     private IEnumerator Start()
     {
@@ -67,9 +81,11 @@ public sealed class SandboxParityCheck : MonoBehaviour
                 samples.Add(sample);
                 string prefix = mode + "/" + aa;
                 Color32[] through = null, settled = null, repeated = null;
+                int bindingsBefore = projectionAudit.mainBindings;
                 context.SetEye(eye, rotation, true);
                 yield return SandboxProbeContext.Settle(120);
                 yield return context.Capture(prefix + "-through", roi, pixels => { through = pixels; Captured(sample, pixels, true); });
+                SaveProjectionAudit(prefix + "-through", bindingsBefore);
                 context.SetEye(direct, mapping.rotation * rotation, false);
                 yield return SandboxProbeContext.Settle(1);
                 yield return context.Capture(prefix + "-direct-first", roi, pixels => Captured(sample, pixels, false));
@@ -128,6 +144,88 @@ public sealed class SandboxParityCheck : MonoBehaviour
             data.renderingPathCustomFrameSettingsOverrideMask.mask[(uint)FrameSettingsField.SSAO] = true;
             data.renderingPathCustomFrameSettings.SetEnabled(FrameSettingsField.SSAO, false);
         }
+        // PortalSystem(1000) may recreate and resubscribe renderers this frame.
+        // Move our handler to the tail only after their preparation, not just at Start.
+        RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+        RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
+    }
+
+    private void OnBeginCameraRendering(ScriptableRenderContext renderContext, Camera camera)
+    {
+        if (context == null || run == null || run.IsCompleted || !regularProjection || camera != context.Main) return;
+        ObserveProjectionBindings(true);
+    }
+
+    private int ObserveProjectionBindings(bool synchronize)
+    {
+        projectionBlock ??= new MaterialPropertyBlock();
+        int observed = 0;
+        Camera[] cameras = Camera.allCameras;
+        foreach (Portal portal in context.Portals)
+        {
+            if (portal == null || !portal.gameObject.activeInHierarchy || portal.playerCamera != context.Main || portal.ViewTexture == null) continue;
+            if (portal.screen == null || !portal.writeContentDepth)
+            { ProjectionFailure("Regular projection requires the existing screen and content-depth binding."); continue; }
+            Camera root = null;
+            int matches = 0;
+            foreach (Camera camera in cameras)
+                if (camera != context.Main && camera.isActiveAndEnabled && camera.targetTexture == portal.ViewTexture
+                    && camera.GetComponentInParent<Portal>() == portal)
+                { root = camera; matches++; }
+            if (matches != 1)
+            { ProjectionFailure("Regular projection cannot identify exactly one bound root virtual camera."); continue; }
+            portal.screen.GetPropertyBlock(projectionBlock);
+            Texture depth = projectionBlock.GetTexture(ContentDepthId);
+            if (depth == null || depth == Texture2D.blackTexture)
+            { ProjectionFailure("Regular projection has no bound content-depth texture."); continue; }
+            Matrix4x4 projection = root.projectionMatrix;
+            if (!PortalCheckPolicy.Finite(projection.determinant) || Mathf.Abs(projection.determinant) < 1e-12f)
+            { ProjectionFailure("Regular virtual projection is not invertible."); continue; }
+            Matrix4x4 expected = GL.GetGPUProjectionMatrix(projection, true).inverse;
+            // The production main-camera callback has restored ViewTexture and depth.
+            // Preserve that texture and all other properties; only the inverse changes.
+            if (synchronize) portal.SetContentBuffers(depth, expected);
+            portal.screen.GetPropertyBlock(projectionBlock);
+            Matrix4x4 bound = projectionBlock.GetMatrix(InverseProjectionId);
+            float error = 0;
+            for (int i = 0; i < 16; i++)
+            {
+                if (!PortalCheckPolicy.Finite(expected[i]) || !PortalCheckPolicy.Finite(bound[i]))
+                { ProjectionFailure("Consumed regular inverse contains non-finite values."); return observed; }
+                error = Mathf.Max(error, Mathf.Abs(expected[i] - bound[i]));
+            }
+            projectionAudit.maxElementError = Mathf.Max(projectionAudit.maxElementError, error);
+            projectionAudit.portal = portal.name;
+            projectionAudit.rootCamera = root.name;
+            projectionAudit.depthTexture = depth.name;
+            projectionAudit.expectedInverse = expected;
+            projectionAudit.boundInverse = bound;
+            if (error > 0.00001f || projectionBlock.GetTexture(ContentDepthId) != depth)
+            { ProjectionFailure("Consumed regular inverse or content-depth texture differs from the virtual camera binding."); continue; }
+            observed++;
+            if (synchronize)
+            {
+                projectionAudit.mainBindings++;
+                projectionAudit.lastBindingFrame = Time.frameCount;
+            }
+        }
+        return observed;
+    }
+
+    private void ProjectionFailure(string reason)
+    {
+        if (string.IsNullOrEmpty(projectionAudit.failureReason)) projectionAudit.failureReason = reason;
+        if (string.IsNullOrEmpty(context.Problem)) context.Problem = reason;
+    }
+
+    private void SaveProjectionAudit(string name, int bindingsBefore)
+    {
+        if (!regularProjection) return;
+        // Capture runs at end of frame: re-read, do not repair a later overwrite.
+        if (ObserveProjectionBindings(false) == 0 || projectionAudit.mainBindings <= bindingsBefore
+            || projectionAudit.lastBindingFrame != Time.frameCount)
+            ProjectionFailure("Regular capture has no demonstrated synchronized main-camera binding.");
+        context.Save(name + "-projection-audit.json", JsonUtility.ToJson(projectionAudit, true));
     }
 
     private IEnumerator Leakage()
@@ -169,12 +267,16 @@ public sealed class SandboxParityCheck : MonoBehaviour
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/oblique-marker", null, pixels => oblique = pixels);
         regularProjection = true;
+        int bindingsBefore = projectionAudit.mainBindings;
         PortalSystem.ResetHistory();
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/regular-positive-marker", null, pixels => regular = pixels);
+        SaveProjectionAudit("leakage/regular-positive-marker", bindingsBefore);
         marker.SetActive(false);
+        bindingsBefore = projectionAudit.mainBindings;
         yield return SandboxProbeContext.Settle(120);
         yield return context.Capture("leakage/background-regular", null, pixels => backgroundRegular = pixels);
+        SaveProjectionAudit("leakage/background-regular", bindingsBefore);
         control.completed = oblique != null && regular != null && backgroundOblique != null && backgroundRegular != null;
         if (control.completed)
         {
@@ -214,6 +316,7 @@ public sealed class SandboxParityCheck : MonoBehaviour
         if (context != null)
         {
             SaveMetrics();
+            context.Save("projection-audit.json", JsonUtility.ToJson(projectionAudit, true));
             context.Save("parity-summary.txt", decision.status + ": " + decision.failureReason
                 + "\nAcceptance: baseline/None only; each channel MAE<=0.15, max<=2 in byte units. ROI bottom-left=(480,260,320,200).\n"
                 + "TAA/AO-off/regular projection are diagnostic; dynamic motion is not certified.\n");
@@ -223,9 +326,12 @@ public sealed class SandboxParityCheck : MonoBehaviour
 
     private void OnDisable()
     {
+        RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
         if (marker != null) Destroy(marker);
         if (markerMaterial != null) Destroy(markerMaterial);
         context?.Dispose();
         if (run != null && !run.IsCompleted) Finish(new PortalCheckDecision("Blocked", "Parity probe disabled before all modes completed."));
     }
+
+    private void OnDestroy() => RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
 }

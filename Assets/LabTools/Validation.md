@@ -137,6 +137,16 @@ Regular positive count=0 или неполный fixture дают Blocked; ви�
 
 Артефакты: `parity-metrics.csv`, `parity-summary.txt`, все PNG/metadata по mode/AA,
 per-mode metrics JSON, `leakage-control.json` и leakage PNG/background/fixture.
+Regular projection синхронизирует только `_PortalInverseProjection` через public
+Portal binding после штатных main-camera callbacks. Текущие depth texture и остальные
+свойства сохраняются; baseline/oblique и чужие камеры не изменяются. Подписка
+переподключается в LateUpdate(2000) после PortalSystem(1000), включая пересоздание камер.
+`*-projection-audit.json` у regular through/positive/background captures и общий
+`projection-audit.json` содержат observed main bindings, последний frame, root/portal,
+depth name, expected/bound GPU inverse и максимальную поэлементную ошибку.
+В конце capture frame binding перечитывается без исправления: ошибка >1e-5,
+неоднозначный root, отсутствующий depth или отсутствие main binding в текущем кадре
+делают fixture Blocked. Этот runtime audit дополняет, но не заменяет реальные Player captures.
 Все данные сохраняются и при Failed. Один финальный PortalCheckResult идёт после всех
 режимов/control; runtime exceptions и watchdog по-прежнему обрабатываются общим контрактом.
 Заморозка Rigidbody/отключение движения ограничены диагностическим Player; shared profiles
@@ -151,7 +161,11 @@ Root `(0,0.1,-3.5)`, eye `(0,1.75,-3.5)`, yaw0 или180 для behind.
 В каждом из двух раундов: off, depth2, depth0, depth2-no-aov, depth0-no-aov,
 depth2-divider2, behind. В no-aov меняется только `writeContentDepth=false`;
 перед сменой параметров portals отключаются на кадр, чтобы AOV requests не остались
-на старых камерах. Каждый режим: ровно 180 warmup и360 sample frames.
+на старых камерах. Затем один явно нетаймируемый setup frame позволяет новым камерам
+впервые выполнить AOV и зарегистрировать lazy markers. Discovery, запуск recorders,
+выделение sample storage и запись available-counters завершаются перед полными
+180 warmup; после них сохраняются ровно360 sample frames. `round*/<mode>-window.txt`
+фиксирует frame indices завершения setup, начала/конца sampling и оба required counts.
 
 `performance.csv` содержит median/p95/counts; `round*/<mode>-samples.csv` — реальные
 покадровые значения/наличие counters. Time.unscaledDeltaTime хранится отдельно от
@@ -188,6 +202,20 @@ per-round ROI JSON, `performance-contract.txt`, `performance-summary.txt`.
 без overhead. Более медленный прогон может дать Blocked до завершения; сокращение
 выборки или обход watchdog не выполняются. Ресурсы probes освобождаются при disable/destroy.
 Ненулевой native Player exit не игнорируется даже при записанном result.json.
+
+## Обычная Sandbox-сборка для cache control
+
+Execute method: `SandboxOrdinaryCheckBuilder.BuildPlayer`. Выход:
+`BuildSandboxOrdinary/SandboxOrdinary.exe`, Windows64 Development/D3D12-first.
+Переменная окружения `PORTAL_CHECK_NAME` должна отсутствовать, иначе builder
+останавливается. Entry point вызывает существующий `Build(null, ...)`: не добавляет
+CleanBuildCache, probe, embedded check identity или runtime bootstrap.
+Это обычный Player, без финального PortalCheckResult; его нельзя считать Passed check.
+
+Entry point должен уже присутствовать до certified Sandbox build. Для cache control
+сначала собирают certified Sandbox, затем ordinary Sandbox теми же source bytes,
+без добавления/изменения кода или исходной сцены между сборками. Реальные build/run,
+проверку отсутствия probe и native exit выполняет main; EditMode не заменяет этот контроль.
 
 ## Сериализация Seam
 

@@ -10,6 +10,29 @@ namespace Portals.Lab.Tests
 {
     public sealed class SandboxCheckBuildTests
     {
+        [Test]
+        public void OrdinarySandboxHasAnExecuteMethodEntrypoint()
+        {
+            Type builder = LabSerializationTests.FindType("SandboxOrdinaryCheckBuilder");
+            var method = builder.GetMethod("BuildPlayer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            Assert.That(method, Is.Not.Null);
+            Assert.That(method.ReturnType, Is.EqualTo(typeof(void)));
+            Assert.That(method.GetParameters(), Is.Empty);
+        }
+
+        [Test]
+        public void OrdinarySandboxDoesNotRequestCleanCacheOrInjectIdentity()
+        {
+            Type builder = LabSerializationTests.FindType("PortalCheckBuildIdentity");
+            var options = (BuildPlayerOptions)builder.GetMethod("PrepareOptions").Invoke(null,
+                new object[] { new BuildPlayerOptions { options = BuildOptions.Development }, null });
+            Assert.That(options.options, Is.EqualTo(BuildOptions.Development));
+            if (!Application.isBatchMode) Assert.Ignore("Requires isolated batchmode editor.");
+            Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            builder.GetMethod("Inject").Invoke(null, new object[] { scene, null });
+            Assert.That(scene.GetRootGameObjects(), Is.Empty);
+        }
+
         [TestCase("SandboxParity")]
         [TestCase("Performance")]
         public void NewChecksRequireCleanIdentityAndAllowCertifiedCompletion(string check)
@@ -46,6 +69,7 @@ namespace Portals.Lab.Tests
         [TestCase("Color")]
         [TestCase("Ghost")]
         [TestCase("")]
+        [TestCase(null)]
         public void UnselectedBuildDoesNotReceiveSandboxProbe(string check)
         {
             Type processor = LabSerializationTests.FindType("SandboxCheckBuildProcessor");

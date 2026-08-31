@@ -54,6 +54,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
     {
         context.Save("performance-contract.txt", "1920x1080; VSync=0; targetFrameRate=-1; runInBackground=true.\n"
             + "Two rounds; each mode has 180 warmup and 360 timed frames. Camera callback count excludes AOV executions.\n"
+            + "An untimed enabled-mode setup frame permits lazy marker registration; discovery/storage/I/O precede all warmup frames.\n"
             + "CPU AOV execution evidence: ProfilerRecorderSample.Count, cross-checked against Recorder.sampleBlockCount.\n"
             + "Empty CPU recorder only yields measured zero when a valid enabled CPU sampler reports zero blocks. Otherwise null.\n"
             + "GPU AOV: GpuRecorder HDRenderPipelineRenderAOV ns/1000000; gpuFrameTime is not total portal GPU cost.\n"
@@ -89,9 +90,9 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         }
         HDCamera.GetOrCreate(context.Main).Reset();
         PortalSystem.ResetHistory();
-        for (int i = 0; i < WarmupFrames; i++) { FrameTimingManager.CaptureFrameTimings(); yield return null; }
+        // Let the newly enabled cameras execute AOV once before discovering lazy markers.
+        yield return null;
         DiscoverCounters();
-        if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0) previousTimestamp = timingBuffer[0].frameStartTimestamp;
         var frames = new double[SampleFrames];
         var callbackSamples = new double[SampleFrames];
         var gpu = new List<double>(SampleFrames);
@@ -104,6 +105,10 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         var executions = new List<double>(SampleFrames);
         var raw = new RawFrame[SampleFrames];
         bool executionDisagreement = false;
+        int setupCompletedFrame = Time.frameCount;
+        for (int i = 0; i < WarmupFrames; i++) { FrameTimingManager.CaptureFrameTimings(); yield return null; }
+        if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0) previousTimestamp = timingBuffer[0].frameStartTimestamp;
+        int samplingStartFrame = Time.frameCount;
         for (int i = 0; i < SampleFrames; i++)
         {
             Reset(ref draws); Reset(ref setPass); Reset(ref aovGpu); Reset(ref aovCpu);
@@ -141,6 +146,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             raw[i] = row;
             run.RecordProgress(++totalFrames, 0);
         }
+        int samplingEndFrame = Time.frameCount;
         var sample = new PortalPerformanceSample { round = round, mode = mode, warmupFrames = WarmupFrames,
             frameSamples = frames.Length, frameMedianMs = PortalPerformanceMetrics.Percentile(frames, 0.5),
             aovExecutionSamples = executionDisagreement ? 0 : executions.Count,
@@ -152,6 +158,8 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         context.Save(prefix + "-settings.txt", "portals=" + enabled + "; depth=" + depth + "; divider=" + divider
             + "; writeContentDepth=" + contentDepth + "; yaw=" + yaw.ToString(CultureInfo.InvariantCulture)
             + "; frameTimingEnabled=" + FrameTimingManager.IsFeatureEnabled() + "; executionCounterDisagreement=" + executionDisagreement + "\n");
+        context.Save(prefix + "-window.txt", "setupCompletedFrame=" + setupCompletedFrame + "; samplingStartFrame=" + samplingStartFrame
+            + "; samplingEndFrame=" + samplingEndFrame + "; warmupFrames=" + WarmupFrames + "; retainedSamples=" + frames.Length + "\n");
         context.Save(prefix + "-samples.csv", RawCsv(raw));
         string summary = round + "," + mode + "," + frames.Length + "," + F(sample.frameMedianMs) + "," + F(PortalPerformanceMetrics.Percentile(frames, 0.95))
             + Stats(gpu) + Stats(cpu) + Stats(main) + Stats(render) + Stats(drawValues) + Stats(passValues) + Stats(aovValues)
