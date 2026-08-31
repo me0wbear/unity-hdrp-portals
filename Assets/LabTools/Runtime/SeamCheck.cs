@@ -4,15 +4,18 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using Portals.Lab.Validation;
+using Unity.Cinemachine;
 using UnityEngine;
 
 /// <summary>
 /// Проходит через портал фиксированными шагами и сохраняет покадровые метрики.
 /// До калибровки визуального порога корректный набор данных получает Blocked.
 /// </summary>
+[DefaultExecutionOrder(950)]
 public sealed class SeamCheck : MonoBehaviour
 {
     public Transform playerRoot;
+    public Camera gameplayCamera;
     public PortalTraveller traveller;
     public UHFPS.Runtime.PlayerStateMachine machine;
     public Vector3 start = new Vector3(0f, 0.1f, -3f);
@@ -23,7 +26,9 @@ public sealed class SeamCheck : MonoBehaviour
     public int pixelStride = 3;
 
     private readonly StringBuilder _report = new StringBuilder();
-    private readonly StringBuilder _csv = new StringBuilder("frame,difference,meanLuminance,crossing,crossingCount\n");
+    private readonly StringBuilder _csv = new StringBuilder("frame,difference,meanLuminance,crossing,crossingCount,"
+        + "cameraTick,cameraSimulatedTime,cameraPositionX,cameraPositionY,cameraPositionZ,"
+        + "cameraRotationX,cameraRotationY,cameraRotationZ,cameraRotationW\n");
     private readonly List<double> _differences = new List<double>();
     private readonly List<double> _luminances = new List<double>();
     private int _teleportFrame = -1;
@@ -33,6 +38,12 @@ public sealed class SeamCheck : MonoBehaviour
     private bool _captureFailed;
     private PortalCheckRun _run;
     private PortalTraveller _subscribedTraveller;
+    private CinemachineBrain _brain;
+    private CinemachineBrain.UpdateMethods _previousBrainUpdate;
+    private CinemachineBrain.BrainUpdateMethods _previousBlendUpdate;
+    private bool _cameraClockActive;
+    private int _lastCameraFrame = -1;
+    private int _cameraTick;
 
     private IEnumerator Start()
     {
@@ -41,7 +52,7 @@ public sealed class SeamCheck : MonoBehaviour
         string directory = _run != null ? _run.OutputDirectory
             : Path.Combine(Directory.GetCurrentDirectory(), outputDirectory);
         CharacterController controller = playerRoot != null ? playerRoot.GetComponent<CharacterController>() : null;
-        if (playerRoot == null || traveller == null || machine == null || controller == null || frames < 4
+        if (playerRoot == null || gameplayCamera == null || traveller == null || machine == null || controller == null || frames < 4
             || !PortalCheckPolicy.Finite(speed) || speed <= 0)
         {
             Finish(new PortalCheckDecision("Failed", "Seam configuration is incomplete."));
@@ -58,6 +69,7 @@ public sealed class SeamCheck : MonoBehaviour
         Texture2D previousFrame = null;
         try
         {
+            StartCameraClock(gameplayCamera);
             for (int f = 0; f < warmupFrames; f++) yield return null;
 
             controller.enabled = false;
@@ -106,7 +118,8 @@ public sealed class SeamCheck : MonoBehaviour
                     bool crossing = _lastTeleportFrame == _frame;
                     _csv.Append(_frame).Append(',').Append(Number(difference)).Append(',')
                         .Append(Number(luminance)).Append(',').Append(crossing ? 1 : 0)
-                        .Append(',').Append(_crossingCount).Append('\n');
+                        .Append(',').Append(_crossingCount);
+                    AppendCameraPose();
                     _report.Append(_frame.ToString("000")).Append(" difference=").Append(Number(difference))
                         .Append(" luminance=").Append(Number(luminance))
                         .Append(crossing ? " crossing" : string.Empty).Append('\n');
@@ -121,6 +134,7 @@ public sealed class SeamCheck : MonoBehaviour
         }
         finally
         {
+            StopCameraClock();
             if (previousFrame != null) Destroy(previousFrame);
             Unsubscribe();
             SaveMetrics(directory);
@@ -132,6 +146,65 @@ public sealed class SeamCheck : MonoBehaviour
         Finish(decision);
     }
 
+    private void StartCameraClock(Camera camera)
+    {
+        if (_cameraClockActive) return;
+        gameplayCamera = camera;
+        _brain = camera.GetComponent<CinemachineBrain>();
+        if (_brain != null)
+        {
+            _previousBrainUpdate = _brain.UpdateMethod;
+            _previousBlendUpdate = _brain.BlendUpdateMethod;
+            _brain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
+            _brain.BlendUpdateMethod = CinemachineBrain.BrainUpdateMethods.LateUpdate;
+        }
+        _lastCameraFrame = -1;
+        _cameraTick = 0;
+        _cameraClockActive = true;
+    }
+
+    // Traveller (900) уже применил переход и bridge warp; PortalSystem (1000)
+    // должен получить итоговую gameplay pose для построения виртуальных камер.
+    private void LateUpdate() => AdvanceCameraClock(Time.frameCount);
+
+    private void AdvanceCameraClock(int renderedFrame)
+    {
+        if (!_cameraClockActive || renderedFrame <= _lastCameraFrame) return;
+        _lastCameraFrame = renderedFrame;
+        ++_cameraTick;
+        if (_brain == null) return;
+        // Один непрерывный счётчик для warmup, settle и walk; damping остаётся 0.2.
+        // Установленная версия ManualUpdate восстанавливает override только при успехе.
+        float previousDelta = CinemachineCore.UniformDeltaTimeOverride;
+        try { _brain.ManualUpdate(_cameraTick, PortalCheckPolicy.SeamStepSeconds); }
+        finally { CinemachineCore.UniformDeltaTimeOverride = previousDelta; }
+    }
+
+    private void StopCameraClock()
+    {
+        if (!_cameraClockActive) return;
+        _cameraClockActive = false;
+        if (_brain != null)
+        {
+            _brain.UpdateMethod = _previousBrainUpdate;
+            _brain.BlendUpdateMethod = _previousBlendUpdate;
+        }
+        _brain = null;
+    }
+
+    private void AppendCameraPose()
+    {
+        // Та же EndOfFrame-итерация, что и захват; между ними нет yield.
+        Transform cameraTransform = gameplayCamera.transform;
+        Vector3 position = cameraTransform.position;
+        Quaternion rotation = cameraTransform.rotation;
+        _csv.Append(',').Append(_cameraTick).Append(',')
+            .Append(Number(_cameraTick * (double)PortalCheckPolicy.SeamStepSeconds)).Append(',')
+            .Append(Number(position.x)).Append(',').Append(Number(position.y)).Append(',').Append(Number(position.z))
+            .Append(',').Append(Number(rotation.x)).Append(',').Append(Number(rotation.y))
+            .Append(',').Append(Number(rotation.z)).Append(',').Append(Number(rotation.w)).Append('\n');
+    }
+
     private bool PrepareDirectory(string directory)
     {
         try { Directory.CreateDirectory(directory); return true; }
@@ -140,6 +213,7 @@ public sealed class SeamCheck : MonoBehaviour
 
     private void Finish(PortalCheckDecision decision)
     {
+        StopCameraClock();
         if (_run != null) _run.Complete("Seam", decision.status, _luminances.Count, _crossingCount, decision.failureReason);
         else
         {
@@ -155,7 +229,11 @@ public sealed class SeamCheck : MonoBehaviour
         _lastTeleportFrame = _frame;
     }
 
-    private void OnDisable() => Unsubscribe();
+    private void OnDisable()
+    {
+        StopCameraClock();
+        Unsubscribe();
+    }
 
     private void Unsubscribe()
     {
@@ -169,7 +247,8 @@ public sealed class SeamCheck : MonoBehaviour
         {
             File.WriteAllText(Path.Combine(directory, "seam-metrics.csv"), _csv.ToString());
             File.WriteAllText(Path.Combine(directory, "seam-summary.txt"),
-                "Units: normalized raw capture RGB. Fixed simulated movement step: 1/60 sec.\n"
+                "Units: normalized raw capture RGB. Fixed simulated movement and camera step: 1/60 sec.\n"
+                + "Camera pose: gameplay Camera world position/quaternion at EndOfFrame; clock includes warmup/settle.\n"
                 + "Visual threshold not calibrated. Teleported events: " + _crossingCount
                 + "; first crossing frame: " + _teleportFrame + "\n" + _report);
         }

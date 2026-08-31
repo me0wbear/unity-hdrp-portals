@@ -47,6 +47,8 @@ Unity Error/Exception/Assert сохраняются как pending failure; ус
 через wantsToQuit и повторяется с ненулевым кодом на следующем Update; fallback
 OnApplicationQuit записывает Blocked без рекурсивного Quit. Нативный crash до Awake
 не может сформировать runtime-результат и должен отклоняться внешним runner.
+До контролируемого retry отклоняются и повторные запросы, включая реентерабельный
+запрос из callback итогового лога. Это не исправление нативного D3D12 shutdown crash.
 
 Артефакты сохраняются в уникальном встроенном `PORTAL_CHECK_OUTPUT`:
 
@@ -66,6 +68,15 @@ Seam: требуется ровно одно событие Teleported, пред
 3 дают 8 м запрошенного перемещения. Coroutine возобновляется перед LateUpdate,
 снимок выполняется после него в EndOfFrame. Первая разность в CSV — NaN, поскольку
 предыдущего снимка ещё нет; остальные разности и все luminance должны быть конечными.
+Для установленного Cinemachine 3.1.4 Seam временно переводит свой Brain в ManualUpdate
+и выполняет `ManualUpdate(cameraTick, 1f/60f)`, сохраняя damping 0.2. Порядок:
+traveller/bridge warp (900), clock и итоговая gameplay Camera (950), PortalSystem (1000).
+Clock делает один tick за кадр, непрерывно через warmup, settle и walk; Unity Time
+не меняется. Прежние update/blend modes восстанавливаются при завершении и disable.
+CSV сохраняет прежние пять полей и добавляет `cameraTick`, `cameraSimulatedTime`
+(секунды с начала clock, включая warmup/settle), `cameraPositionX/Y/Z` и
+`cameraRotationX/Y/Z/W` (world position/quaternion фактической gameplay Camera
+в той же EndOfFrame-итерации, что и capture, не CameraHolder).
 Корректный набор получает Blocked: визуальный порог ещё не откалиброван.
 Отсутствующее/повторное пересечение либо неполные метрики дают Failed.
 
@@ -185,6 +196,9 @@ GUID прежнего LookController сохранён. Это заглушки r
 интеграция UHFPS. `SeamCheckBuilder.PrepareScene` сохраняет и повторно открывает
 сцену, затем проверяет ссылки и постоянные MonoScript. `BuildSavedScene` позволяет
 отдельно собрать подготовленную сцену; `BuildPlayer` выполняет обе фазы.
+После добавления camera clock нужно один раз выполнить `PrepareScene`, чтобы сохранить
+новую ссылку `SeamCheck.gameplayCamera`; затем повторные `BuildSavedScene` используют
+ту же сцену без регенерации. Validator сверяет эту ссылку с камерой bridge.
 Профили переиспользуют прежние GUID и subassets, а не удаляются через DeleteAsset.
 
 Сериализационные round-trip тесты используют GUID-пути и выполняются только в

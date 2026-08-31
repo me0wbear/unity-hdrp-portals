@@ -1,6 +1,6 @@
 {
     "name": "Portals.Lab.Tests",
-    "references": ["UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+    "references": ["UnityEngine.TestRunner", "UnityEditor.TestRunner", "Unity.Cinemachine"],
     "includePlatforms": ["Editor"],
     "overrideReferences": true,
     "precompiledReferences": ["nunit.framework.dll"],

@@ -155,6 +155,7 @@ public static class SeamCheckBuilder
         var checkObject = new GameObject("SeamCheck");
         SeamCheck check = checkObject.AddComponent<SeamCheck>();
         check.playerRoot = player.transform;
+        check.gameplayCamera = playerCamera;
         check.traveller = traveller;
         check.machine = machine;
         check.start = new Vector3(0f, 0.1f, -3f);
@@ -175,7 +176,7 @@ public static class SeamCheckBuilder
         Scene scene = SceneManager.GetActiveScene();
         if (scene.path != ScenePath) throw new UnityEditor.Build.BuildFailedException("Expected saved Seam scene.");
         SeamCheck check = UnityEngine.Object.FindAnyObjectByType<SeamCheck>();
-        if (check == null || check.playerRoot == null || check.traveller == null || check.machine == null
+        if (check == null || check.playerRoot == null || check.gameplayCamera == null || check.traveller == null || check.machine == null
             || check.playerRoot.GetComponent<CharacterController>() == null)
             throw new UnityEditor.Build.BuildFailedException("Saved Seam scene is missing required references.");
         foreach (GameObject root in scene.GetRootGameObjects())
@@ -195,7 +196,7 @@ public static class SeamCheckBuilder
         var serializedBridge = new SerializedObject(bridge);
         var serializedTraveller = new SerializedObject(check.traveller);
         if (serializedBridge.FindProperty("traveller").objectReferenceValue != check.traveller
-            || serializedBridge.FindProperty("gameplayCamera").objectReferenceValue == null
+            || serializedBridge.FindProperty("gameplayCamera").objectReferenceValue != check.gameplayCamera
             || serializedTraveller.FindProperty("viewPoint").objectReferenceValue == null)
             throw new UnityEditor.Build.BuildFailedException("Saved Seam camera/traveller references are missing.");
         Portal[] portals = UnityEngine.Object.FindObjectsByType<Portal>();

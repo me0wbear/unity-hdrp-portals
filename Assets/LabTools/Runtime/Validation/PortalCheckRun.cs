@@ -106,10 +106,12 @@ namespace Portals.Lab.Validation
 
         private bool OnWantsToQuit()
         {
+            if (deferredExit >= 0) return false;
             if (session == null || session.Completed) return true;
-            Finish(identity.check, "Blocked", capturedFrames, crossings, "Application quit before explicit completion.", false);
-            // Отклоняем прежний Quit(0); следующий Update запрашивает проверенный ненулевой код.
+            // Guard нужен и для повторного запроса из callback итогового лога.
+            // Только Update снимает его перед контролируемым ненулевым выходом.
             deferredExit = 2;
+            Finish(identity.check, "Blocked", capturedFrames, crossings, "Application quit before explicit completion.", false);
             return false;
         }
 
