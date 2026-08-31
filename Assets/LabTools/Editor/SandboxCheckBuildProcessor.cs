@@ -18,7 +18,7 @@ public sealed class SandboxCheckBuildProcessor : IProcessSceneWithReport
     {
         if (!BuildPipeline.isBuildingPlayer || report == null || scene.path != ScenePath) return;
         string check = Environment.GetEnvironmentVariable("PORTAL_CHECK_NAME");
-        if (check != "SandboxParity" && check != "Performance") return;
+        if (check != "SandboxParity" && check != "Performance" && check != "Visibility") return;
         PortalCheckRun[] contexts = scene.GetRootGameObjects().SelectMany(root => root.GetComponentsInChildren<PortalCheckRun>(true)).ToArray();
         if (contexts.Length != 1 || new SerializedObject(contexts[0]).FindProperty("identity.check").stringValue != check)
             throw new BuildFailedException("Sandbox probe requires exactly one matching embedded build identity.");
@@ -27,11 +27,13 @@ public sealed class SandboxCheckBuildProcessor : IProcessSceneWithReport
 
     public static void Inject(Scene scene, string check)
     {
-        if (check != "SandboxParity" && check != "Performance") return;
-        Type selected = check == "SandboxParity" ? typeof(SandboxParityCheck) : typeof(PortalPerformanceCheck);
-        Type other = check == "SandboxParity" ? typeof(PortalPerformanceCheck) : typeof(SandboxParityCheck);
+        if (check != "SandboxParity" && check != "Performance" && check != "Visibility") return;
+        Type selected = check == "SandboxParity" ? typeof(SandboxParityCheck)
+            : check == "Performance" ? typeof(PortalPerformanceCheck) : typeof(PortalVisibilityCheck);
+        Type[] probes = { typeof(SandboxParityCheck), typeof(PortalPerformanceCheck), typeof(PortalVisibilityCheck) };
         Component[] existing = scene.GetRootGameObjects().SelectMany(root => root.GetComponentsInChildren(selected, true)).ToArray();
-        if (existing.Length > 1 || scene.GetRootGameObjects().Any(root => root.GetComponentsInChildren(other, true).Length != 0))
+        if (existing.Length > 1 || probes.Any(other => other != selected
+            && scene.GetRootGameObjects().Any(root => root.GetComponentsInChildren(other, true).Length != 0)))
             throw new BuildFailedException("Sandbox build contains duplicate or conflicting probes.");
         Component probe;
         if (existing.Length == 1) probe = existing[0];

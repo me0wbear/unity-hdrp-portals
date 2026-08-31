@@ -24,6 +24,7 @@ case "$NAME" in
   Setup)         METHOD=SetupCheckBuild.BuildPlayer;           DIR=BuildSetupCheck;             EXE=SetupCheck.exe ;;
   SandboxParity) METHOD=SandboxParityCheckBuilder.BuildPlayer; DIR=BuildSandboxParityCheck;     EXE=SandboxParityCheck.exe ;;
   Performance)   METHOD=PortalPerformanceCheckBuilder.BuildPlayer; DIR=BuildPortalPerformanceCheck; EXE=PortalPerformanceCheck.exe ;;
+  Visibility)    METHOD=PortalVisibilityCheckBuilder.BuildPlayer; DIR=BuildPortalVisibilityCheck; EXE=PortalVisibilityCheck.exe ;;
   *) fail "Неизвестная проверка: $NAME" ;;
 esac
 

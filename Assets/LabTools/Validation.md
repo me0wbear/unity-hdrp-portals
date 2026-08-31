@@ -1,4 +1,4 @@
-# Проверки Color, Seam, SandboxParity и Performance
+# Проверки Color, Seam, SandboxParity, Performance и Visibility
 
 Проверки связывают итог с конкретной сборкой и сохраняют данные до объявления результата.
 Поддерживаемая конфигурация: Unity 6000.5.9f1, установленный HDRP 17.5.0,
@@ -13,7 +13,7 @@ Builders `ColorCheckBuilder.BuildPlayer` и `SeamCheckBuilder.BuildPlayer` со�
 с этим интерфейсом. Для исходной Sandbox доступны `SandboxParityCheckBuilder.BuildPlayer`
 и `PortalPerformanceCheckBuilder.BuildPlayer`. Не запускайте второй Editor для того же checkout.
 
-Все четыре проверки явно добавляют `BuildOptions.CleanBuildCache`. Preprocess callback
+Все пять проверок явно добавляют `BuildOptions.CleanBuildCache`. Preprocess callback
 отклоняет сертифицированную сборку без этой опции: изменившийся runId не является
 зависимостью обычного кэша обработки сцен. Дополнительно callback регистрирует
 `Logs/portal-check-build-state.json` через `BuildPipelineContext.DependOnPath`.
@@ -231,6 +231,49 @@ per-round ROI JSON, `performance-contract.txt`, `performance-summary.txt`.
 без overhead. Более медленный прогон может дать Blocked до завершения; сокращение
 выборки или обход watchdog не выполняются. Ресурсы probes освобождаются при disable/destroy.
 Ненулевой native Player exit не игнорируется даже при записанном result.json.
+
+## Visibility
+
+Запуск из свободного изолированного checkout: `bash tools/check.sh Visibility`.
+Builder `PortalVisibilityCheckBuilder.BuildPlayer` создаёт
+`BuildPortalVisibilityCheck/PortalVisibilityCheck.exe`: Windows64 Development,
+D3D12, 1280×720, исходная Sandbox без сохранения изменений. Только новое имя
+`Visibility` получает этот probe; контракты прежних проверок не меняются.
+
+Проверка использует существующие `Recursion_Pair` и `Recursion_Marker`.
+Eye (20,1.75,14), yaw −90/+90 смотрит в A/B. Активен root одной стороны,
+компонент второго Portal отключён, но его screen остаётся consumer. Для каждой
+стороны сравниваются depth4 с culling opt-out, depth0 и depth4 с оптимизацией.
+Lens, AA=None, render settings, AOV и разрешение RT не меняются.
+Центральный ROI снизу слева (480,200,320,320) содержит 102400 пикселей.
+Reference/optimized RGB должны совпадать точно. Depth0 обязан показать отличие:
+max channel difference ≥16 и средняя RGB MAE ≥0.5 в 8-bit units; иначе Blocked.
+
+Hide/reentry не отключает root и не вызывает ResetHistory. Сохраняются первый
+кадр возврата и settled кадр, ссылки на камеры/RT и HDRP history counter перед
+первым render. Settled должен совпасть с reference; first/settled сохраняется
+как диагностическая разность, не как сертификация TAA или motion.
+
+Для бюджета создаются ровно три неактивных клона существующей пары в runtime
+build-copy, без старых камер. После конфигурации активируется один root каждой
+пары. Бюджеты 0/3/1/4/0/3 должны дать callbacks [0,0,0]/[1,1,1]/[0,0,1]/
+[1,1,2]/[0,0,0]/[1,1,1]. Приоритет задаёт возрастающий физический размер проёма.
+Проверяются фактические beginCameraRendering, deepest-first, оба child binding,
+отсутствие feedback, main fallback/depth, cold отсутствие камер и reuse/history
+после starvation. Идентичность cloned cameras записана в observation JSON;
+общий Sandbox metadata helper не классифицирует runtime-клоны как исходные portals.
+
+Артефакты: 15 PNG с metadata/observation JSON, `visibility-evidence.json`,
+`reentry-first-vs-settled.json`, `visibility-contract.txt` и стандартный result.
+Недостающий fixture/evidence даёт Blocked; нарушения наблюдаемых инвариантов — Failed.
+Editor tests не заменяют этот actual Player-контроль.
+
+Для legacy build-only используйте `PortalVisibilityCheckBuilder.BuildLegacy`,
+без `PORTAL_CHECK_NAME`, с `PORTAL_LEGACY_CHECK=Rotate|Cross|Ghost` и абсолютным
+`PORTAL_LEGACY_OUTPUT`. Builder собирает сохранённую сцену и не вызывает её
+генератор, SaveAssets или DeleteAsset. Players со screenshot capture запускаются
+видимо; background Editor — скрыто. Missing scripts, timeout и отсутствие итогового
+JSON остаются отдельными ограничениями legacy, даже при native exit 0.
 
 ## Обычная Sandbox-сборка для cache control
 

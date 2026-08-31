@@ -35,6 +35,7 @@ namespace Portals.Lab.Tests
 
         [TestCase("SandboxParity")]
         [TestCase("Performance")]
+        [TestCase("Visibility")]
         public void NewChecksRequireCleanIdentityAndAllowCertifiedCompletion(string check)
         {
             Type builder = LabSerializationTests.FindType("PortalCheckBuildIdentity");
@@ -50,6 +51,7 @@ namespace Portals.Lab.Tests
 
         [TestCase("SandboxParity", "SandboxParityCheck")]
         [TestCase("Performance", "PortalPerformanceCheck")]
+        [TestCase("Visibility", "PortalVisibilityCheck")]
         public void BuildCopyInjectionIsIdempotentAndHasPersistentScript(string check, string probe)
         {
             Type processor = LabSerializationTests.FindType("SandboxCheckBuildProcessor");

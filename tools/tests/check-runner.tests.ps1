@@ -134,6 +134,7 @@ public static class FakeUnity {
             string dir = "Build" + check + "Check", exe = check + "Check.exe";
             if (check == "AutoWire") { dir = "BuildAutoWire"; exe = "AutoWire.exe"; }
             if (check == "Performance") { dir = "BuildPortalPerformanceCheck"; exe = "PortalPerformanceCheck.exe"; }
+            if (check == "Visibility") { dir = "BuildPortalVisibilityCheck"; exe = "PortalVisibilityCheck.exe"; }
             Directory.CreateDirectory(Path.Combine(project, dir));
             File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(project, dir, exe), true);
             return Code("FAKE_BUILD_EXIT");
@@ -235,7 +236,7 @@ public static class FakeUnity {
         Assert-True (((Get-Calls).stage -join ',') -eq 'warmup,build') 'Stale player was launched.'
         Assert-True ([IO.File]::ReadAllText($keep) -ceq 'preserve') 'Sibling file modified.'
     }
-    foreach ($check in @('Color', 'Ghost', 'Rotate', 'Cross', 'Look', 'Cinemachine', 'Bubble', 'Close', 'Light', 'Prefab', 'AutoWire', 'Setup', 'SandboxParity', 'Performance')) {
+    foreach ($check in @('Color', 'Ghost', 'Rotate', 'Cross', 'Look', 'Cinemachine', 'Bubble', 'Close', 'Light', 'Prefab', 'AutoWire', 'Setup', 'SandboxParity', 'Performance', 'Visibility')) {
         Test-Runner "$check builder and player mapping" {
             $result = Invoke-Runner $testRoot $check
             Assert-True ($result.Exit -eq 0) $result.Output
@@ -244,6 +245,7 @@ public static class FakeUnity {
             if ($check -eq 'AutoWire') { $method = 'AutoWireCheckBuilder.BuildPlayer' }
             if ($check -eq 'Setup') { $method = 'SetupCheckBuild.BuildPlayer' }
             if ($check -eq 'Performance') { $method = 'PortalPerformanceCheckBuilder.BuildPlayer' }
+            if ($check -eq 'Visibility') { $method = 'PortalVisibilityCheckBuilder.BuildPlayer' }
             Assert-True ($calls[1].method -ceq $method) 'Wrong builder mapping.'
             $width = if ($check -eq 'Performance') { '1920' } else { '1280' }
             $height = if ($check -eq 'Performance') { '1080' } else { '720' }
