@@ -646,6 +646,22 @@ public sealed class PortalRenderer
         // экспонирования разошлись бы, и проём отличался бы яркостью от окружения.
         Override(data, FrameSettingsField.ExposureControl, false);
 
+        // Экранные эффекты, читающие глубину, по умолчанию выключены. Проекция
+        // виртуальной камеры косая, а HDRP линеаризует глубину для них через
+        // LinearEyeDepth, которая косую проекцию не поддерживает: точки
+        // восстанавливаются на неверных расстояниях, затенение ложится грязью в
+        // стыки поверхностей, и вид в проёме отличается от вида после перехода.
+        // Поле портала возвращает эффекты осознанно; применяется при создании
+        // камер, как и writeContentDepth.
+        if (!_portal.screenSpaceEffectsInView)
+        {
+            Override(data, FrameSettingsField.SSAO, false);
+            Override(data, FrameSettingsField.SSR, false);
+            Override(data, FrameSettingsField.TransparentSSR, false);
+            Override(data, FrameSettingsField.SSGI, false);
+            Override(data, FrameSettingsField.ContactShadows, false);
+        }
+
         CopyLens(viewer, camera);
         return camera;
     }
