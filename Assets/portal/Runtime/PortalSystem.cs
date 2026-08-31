@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
 
 /// <summary>
@@ -30,6 +31,11 @@ public sealed class PortalSystem : MonoBehaviour
     private static Transform _volumeAnchor;
     private static HDAdditionalCameraData _volumeAnchorOwner;
 
+    // Глобальный Volume, которым модуль гасит экранное затенение главной
+    // камеры около проёма, и его профиль, созданный в рантайме.
+    private static Volume _occlusionFadeVolume;
+    private static VolumeProfile _occlusionFadeProfile;
+
     /// <summary>Порталы, включённые прямо сейчас. Порядок — порядок включения.</summary>
     public static IReadOnlyList<Portal> Active => Portals;
 
@@ -46,6 +52,8 @@ public sealed class PortalSystem : MonoBehaviour
         _instance = null;
         _volumeAnchor = null;
         _volumeAnchorOwner = null;
+        _occlusionFadeVolume = null;
+        _occlusionFadeProfile = null;
     }
 
     public static void Register(Portal portal)
@@ -153,6 +161,7 @@ public sealed class PortalSystem : MonoBehaviour
 
         Portal blendPortal = null;
         float blendWeight = 0f;
+        float occlusionFade = 0f;
 
         for (int i = 0; i < Portals.Count; i++)
         {
@@ -188,9 +197,21 @@ public sealed class PortalSystem : MonoBehaviour
                 blendWeight = weight;
                 blendPortal = portal;
             }
+
+            // Гашение затенения, в отличие от переноса грейдинга, не привязано
+            // к тому, рендерится ли портал. Сразу после перехода портал за
+            // спиной не виден и не рисуется, но наблюдатель стоит вплотную к
+            // его плоскости, и затенение обязано остаться погашенным — иначе
+            // оно вернулось бы скачком в следующий же кадр.
+            if (portal.fadeOcclusionNearCrossing && portal.exitPortal != null)
+            {
+                occlusionFade = Mathf.Max(
+                    occlusionFade, ProximityWeight(portal, portal.playerCamera));
+            }
         }
 
         ApplyVolumeBlend(blendPortal, blendWeight);
+        ApplyOcclusionFade(occlusionFade);
     }
 
     /// <summary>
@@ -206,6 +227,17 @@ public sealed class PortalSystem : MonoBehaviour
             return 0f;
         }
 
+        return ProximityWeight(portal, viewer);
+    }
+
+    /// <summary>
+    /// Насколько наблюдатель подошёл к проёму: ноль дальше дистанции переноса,
+    /// единица вплотную к плоскости. Считается только для того, к чьему проёму
+    /// наблюдатель реально подошёл: до бесконечной плоскости портала можно
+    /// оказаться близко, стоя в тридцати метрах вбок.
+    /// </summary>
+    private static float ProximityWeight(Portal portal, Camera viewer)
+    {
         Vector3 eye = viewer.transform.position;
         if (!PortalMath.IsInsideOpening(
                 portal.transform, eye, portal.OpeningSize, portal.volumeBlendDistance))
@@ -213,10 +245,12 @@ public sealed class PortalSystem : MonoBehaviour
             return 0f;
         }
 
-        // Только с лицевой стороны. Портал, к которому наблюдатель стоит спиной,
-        // ничего ему не показывает и тянуть его цветокоррекцию не должен. Без
-        // этой проверки вышедший из портала попадает в зону переноса того же
-        // портала и получает грейдинг комнаты, из которой только что ушёл.
+        // Только с лицевой стороны. Портал, к которому наблюдатель стоит спиной
+        // за плоскостью, ничего ему не показывает. Для грейдинга без этой
+        // проверки вышедший из портала попадал бы в зону переноса того же
+        // портала и получал грейдинг комнаты, из которой только что ушёл.
+        // Вышедший наблюдатель при этом стоит с лицевой стороны выхода, поэтому
+        // гашение затенения через тот же вес продолжается и после перехода.
         float distance = PortalMath.SignedDistance(portal.transform, eye);
         if (distance <= 0f)
         {
@@ -273,6 +307,59 @@ public sealed class PortalSystem : MonoBehaviour
         _volumeAnchorOwner = data;
     }
 
+    /// <summary>
+    /// Гасит экранное затенение главной камеры по мере подхода к проёму.
+    ///
+    /// Зачем. Виртуальные камеры рисуют вид без экранных эффектов — их глубина
+    /// в косой проекции линеаризуется неверно, — поэтому в проёме затенения
+    /// нет. Сразу после перехода то же место рисует главная камера уже с
+    /// затенением, и разница читается как скачок контраста ровно в кадр
+    /// телепорта. Гашение выравнивает обе стороны заранее: у плоскости проёма
+    /// затенение главной камеры уже нулевое, и кадры до и после перехода
+    /// совпадают. Расплата — затенение плавно ослабевает в паре метров у
+    /// проёма; глаз читает это как постепенное изменение, а не как разрыв.
+    /// </summary>
+    private static void ApplyOcclusionFade(float weight)
+    {
+        if (weight <= 0f)
+        {
+            if (_occlusionFadeVolume != null)
+            {
+                _occlusionFadeVolume.weight = 0f;
+            }
+
+            return;
+        }
+
+        EnsureOcclusionFadeVolume();
+        _occlusionFadeVolume.weight = weight;
+    }
+
+    private static void EnsureOcclusionFadeVolume()
+    {
+        if (_occlusionFadeVolume != null)
+        {
+            return;
+        }
+
+        _occlusionFadeProfile = ScriptableObject.CreateInstance<VolumeProfile>();
+        _occlusionFadeProfile.name = "PortalOcclusionFadeProfile";
+
+        ScreenSpaceAmbientOcclusion occlusion =
+            _occlusionFadeProfile.Add<ScreenSpaceAmbientOcclusion>();
+        occlusion.intensity.overrideState = true;
+        occlusion.intensity.value = 0f;
+
+        // Живёт на носителе системы и разделяет его время жизни. Приоритет
+        // выше обычных сценовых Volume, чтобы гашение побеждало профиль сцены;
+        // проект с ещё большим приоритетом перебивает модуль осознанно.
+        _occlusionFadeVolume = _instance.gameObject.AddComponent<Volume>();
+        _occlusionFadeVolume.isGlobal = true;
+        _occlusionFadeVolume.priority = 100f;
+        _occlusionFadeVolume.weight = 0f;
+        _occlusionFadeVolume.profile = _occlusionFadeProfile;
+    }
+
     private static void EnsureVolumeAnchor()
     {
         if (_volumeAnchor == null)
@@ -302,6 +389,16 @@ public sealed class PortalSystem : MonoBehaviour
     {
         Application.quitting -= ReleaseAll;
         ReleaseAll();
+
+        // Профиль создан в рантайме и никем больше не удерживается; сам Volume
+        // уничтожается вместе с носителем.
+        if (_occlusionFadeProfile != null)
+        {
+            Destroy(_occlusionFadeProfile);
+        }
+
+        _occlusionFadeProfile = null;
+        _occlusionFadeVolume = null;
 
         Renderers.Clear();
         Portals.Clear();
