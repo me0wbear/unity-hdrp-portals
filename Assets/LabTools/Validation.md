@@ -186,15 +186,21 @@ executions; execution evidence — CPU `ProfilerRecorderSample.Count`, пров�
 против `Recorder.sampleBlockCount`. Empty CPU recorder допускает zero только при
 валидном включённом CPU sampler с zero blocks; disagreement делает assertion unavailable.
 Для доказательства отсутствия AOV нужны все360 frame readings, не частичная выборка.
-Перед каждым интервалом recorders получают `Reset()` и `Start()`: Reset останавливает
-native collection, хотя Valid остаётся true. Reader требует IsRunning и Count>0,
-читает GetSample, не LastValue. Реальные CPU marker tests проверяют 1/0/3/1 scopes
-через frame boundaries и повторяют последовательность в следующем режиме.
+Один раз перед warmup режима recorders получают `Reset()` и `Start()`: Reset останавливает
+native collection, хотя Valid остаётся true. Затем сбор непрерывный: буфер4096 samples,
+без wrap-around. Cursor исключает warmup и читает каждый новый sample ровно один раз;
+при переполнении, остановке или потере истории вся серия становится unavailable.
+Покадровый Reset не используется: он может разделять native flush и терять arrivals.
+Reader читает GetSample, не LastValue. Реальные CPU marker tests проверяют 1/0/3/1 scopes,
+сохранение нескольких кадров до чтения, отсутствие повторов и отказ при переполнении.
+`*-native-aov.csv` сохраняет все прочитанные CPU scope counts в порядке поступления;
+native sample не отождествляется с script frame. CSV покадрового чтения содержит только
+последний новый counter sample, а median/p95 используют все новые native samples.
 GPU recorder `HDRenderPipelineRenderAOV` использует GpuRecorder и ns→ms; его sample.Count
 также сохраняется. Это свежие arrivals после Reset/Start, не время текущего render frame.
 `read_frame` — кадр наблюдения; `gpu_source_frame=null`, исходный mode тоже неизвестен:
 API не предоставляет source-frame ID. GPU median/p95 группируют arrivals по окну чтения,
-но не сертифицируют GPU cost режима. Reset может отбросить pending GPU samples;
+но не сертифицируют GPU cost режима. Reset на границе режима может отбросить pending GPU samples;
 полнота GPU выборки и latency не доказаны. Нулевой Count остаётся null, а не старым LastValue.
 `gpuFrameTime` не называется полной стоимостью портального GPU render.
 Смысл count описан в [Unity ProfilerRecorderSample.Count](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Unity.Profiling.ProfilerRecorderSample.Count.html).

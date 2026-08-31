@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using Unity.Profiling;
+using Unity.Profiling.LowLevel.Unsafe;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -46,11 +48,109 @@ namespace Portals.Lab.Tests
 
         private static double? Read(ProfilerRecorder recorder, out double? count)
         {
-            object[] args = { recorder, true, null };
-            var value = (double?)LabSerializationTests.FindType("PortalPerformanceCheck")
-                .GetMethod("Read", StaticPrivate).Invoke(null, args);
-            count = (double?)args[2];
+            int cursor = 0;
+            return Drain(recorder, ref cursor, null, out count);
+        }
+
+        private static ProfilerRecorder ProductionRecorder(string markerName)
+        {
+            var handles = new List<ProfilerRecorderHandle>();
+            ProfilerRecorderHandle.GetAvailable(handles);
+            foreach (var handle in handles)
+            {
+                var description = ProfilerRecorderHandle.GetDescription(handle);
+                if (description.Name != markerName) continue;
+                return (ProfilerRecorder)LabSerializationTests.FindType("PortalPerformanceCheck")
+                    .GetMethod("Start", StaticPrivate).Invoke(null, new object[] { description, false });
+            }
+            Assert.Fail("Созданный native marker должен присутствовать в discovery.");
+            return default;
+        }
+
+        private static double? Drain(ProfilerRecorder recorder, ref int cursor, List<double> values, out double? count)
+        {
+            var method = LabSerializationTests.FindType("PortalPerformanceCheck").GetMethod("ReadFresh", StaticPrivate);
+            Assert.That(method, Is.Not.Null, "Для непрерывного сбора требуется cursor-aware reader.");
+            object[] args = { recorder, true, cursor, null, values };
+            var value = (double?)method.Invoke(null, args);
+            cursor = (int)args[2];
+            count = (double?)args[3];
             return value;
+        }
+
+        [UnityTest]
+        public IEnumerator ProductionRecorderRetainsFramesUntilConsumption()
+        {
+            string name = "PortalCounterRetention-" + Guid.NewGuid().ToString("N");
+            var marker = new ProfilerMarker(ProfilerCategory.Scripts, name);
+            var recorder = ProductionRecorder(name);
+            try
+            {
+                foreach (int scopes in new[] { 1, 1, 3 })
+                {
+                    for (int i = 0; i < scopes; i++) using (marker.Auto()) { }
+                    yield return null;
+                }
+                for (int i = 0; i < 4; i++) yield return null;
+                Assert.That(recorder.IsRunning, Is.True);
+                Assert.That(recorder.WrappedAround, Is.False, "Producer не должен затирать непрочитанные кадры.");
+                long total = 0;
+                for (int i = 0; i < recorder.Count; i++) total += recorder.GetSample(i).Count;
+                Assert.That(total, Is.EqualTo(5));
+            }
+            finally { recorder.Dispose(); }
+        }
+
+        [UnityTest]
+        public IEnumerator FreshReaderConsumesEveryArrivalOnceAndExcludesPreviousMode()
+        {
+            var marker = Marker();
+            var recorder = ProfilerRecorder.StartNew(marker, 64);
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    using (marker.Auto()) { }
+                    yield return null;
+                }
+                for (int i = 0; i < 4; i++) yield return null;
+                var values = new List<double>();
+                int cursor = 0;
+                Assert.That(Drain(recorder, ref cursor, values, out _), Is.Not.Null);
+                Assert.That(values.Count, Is.EqualTo(recorder.Count));
+                int consumed = values.Count;
+                Assert.That(Drain(recorder, ref cursor, values, out var repeatedCount), Is.Null);
+                Assert.That(repeatedCount, Is.Null);
+                Assert.That(values.Count, Is.EqualTo(consumed));
+                ResetForFrame(ref recorder);
+                cursor = 0;
+                values.Clear();
+                Assert.That(Drain(recorder, ref cursor, values, out _), Is.Null);
+                Assert.That(values, Is.Empty, "Граница режима не должна переносить старые данные.");
+            }
+            finally { recorder.Dispose(); }
+        }
+
+        [UnityTest]
+        public IEnumerator FreshReaderRejectsOverwrittenHistory()
+        {
+            var marker = Marker();
+            var recorder = ProfilerRecorder.StartNew(marker, 1);
+            try
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    using (marker.Auto()) { }
+                    yield return null;
+                }
+                Assert.That(recorder.WrappedAround, Is.True, "Контроль должен действительно переполнить буфер.");
+                int cursor = 0;
+                var values = new List<double> { 123 };
+                Assert.That(Drain(recorder, ref cursor, values, out _), Is.Null);
+                Assert.That(cursor, Is.LessThan(0));
+                Assert.That(values, Is.Empty, "Неполная история не должна оставаться валидной статистикой.");
+            }
+            finally { recorder.Dispose(); }
         }
 
         [Test]

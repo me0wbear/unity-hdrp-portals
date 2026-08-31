@@ -57,9 +57,10 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             + "An untimed enabled-mode setup frame permits lazy marker registration; discovery/storage/I/O precede all warmup frames.\n"
             + "CPU AOV execution evidence: ProfilerRecorderSample.Count, cross-checked against Recorder.sampleBlockCount.\n"
             + "Empty CPU recorder only yields measured zero when a valid enabled CPU sampler reports zero blocks. Otherwise null.\n"
-            + "Recorders use Reset then Start before each frame; Read requires running collection and a new stored sample, never LastValue.\n"
-            + "GPU AOV: fresh arrivals since Reset/Start, HDRenderPipelineRenderAOV ns/1000000. Source render frame/mode is unknown.\n"
-            + "GPU summaries group arrivals by observation window only; reset may discard pending GPU samples, so completeness is unproved.\n"
+            + "Recorders reset/start once before mode warmup, then collect continuously into bounded non-wrapping storage.\n"
+            + "Warmup samples are excluded by cursor; each later native sample is consumed once. Overflow invalidates the series.\n"
+            + "GPU AOV: fresh native arrivals, HDRenderPipelineRenderAOV ns/1000000. Source render frame/mode is unknown.\n"
+            + "Counter summaries group native flush observations, not script frames. GPU completeness/mode attribution is unproved.\n"
             + "No GPU latency is assumed; neither AOV arrivals nor gpuFrameTime represent total portal GPU cost.\n"
             + "Missing aggregate Draw Calls Count stays null; available-counters.txt is a filtered inventory, not all Unity counters.\n"
             + "Published top-left ROI=(865,420,190,290); Texture2D bottom-left=(865,370,190,290).\n");
@@ -97,15 +98,17 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         // Let the newly enabled cameras execute AOV once before discovering lazy markers.
         yield return null;
         DiscoverCounters();
+        Reset(ref draws); Reset(ref setPass); Reset(ref aovGpu); Reset(ref aovCpu);
         var frames = new double[SampleFrames];
         var callbackSamples = new double[SampleFrames];
         var gpu = new List<double>(SampleFrames);
         var cpu = new List<double>(SampleFrames);
         var main = new List<double>(SampleFrames);
         var render = new List<double>(SampleFrames);
-        var drawValues = new List<double>(SampleFrames);
-        var passValues = new List<double>(SampleFrames);
-        var aovValues = new List<double>(SampleFrames);
+        var drawValues = new List<double>(CounterCapacity);
+        var passValues = new List<double>(CounterCapacity);
+        var aovValues = new List<double>(CounterCapacity);
+        var nativeAovCounts = new List<long>(CounterCapacity);
         var executions = new List<double>(SampleFrames);
         var raw = new RawFrame[SampleFrames];
         bool executionDisagreement = false;
@@ -113,10 +116,13 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         int setupCompletedFrame = Time.frameCount;
         for (int i = 0; i < WarmupFrames; i++) { FrameTimingManager.CaptureFrameTimings(); yield return null; }
         if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0) previousTimestamp = timingBuffer[0].frameStartTimestamp;
+        int drawCursor = draws.Valid ? draws.Count : 0;
+        int passCursor = setPass.Valid ? setPass.Count : 0;
+        int gpuCursor = aovGpu.Valid ? aovGpu.Count : 0;
+        int cpuCursor = aovCpu.Valid ? aovCpu.Count : 0;
         int samplingStartFrame = Time.frameCount;
         for (int i = 0; i < SampleFrames; i++)
         {
-            Reset(ref draws); Reset(ref setPass); Reset(ref aovGpu); Reset(ref aovCpu);
             callbacks = 0;
             FrameTimingManager.CaptureFrameTimings();
             yield return null;
@@ -124,10 +130,14 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             frames[i] = Time.unscaledDeltaTime * 1000.0;
             callbackSamples[i] = callbacks;
             RawFrame row = new RawFrame { frame = i, readFrame = Time.frameCount, frameMs = frames[i], callbacks = callbacks };
-            row.draw = Read(draws, false, out row.drawCount);
-            row.setPass = Read(setPass, false, out row.setPassCount);
-            row.aovGpuMs = Read(aovGpu, true, out row.aovGpuCount);
-            Read(aovCpu, true, out double? cpuCount);
+            row.draw = ReadFresh(draws, false, ref drawCursor, out row.drawCount, drawValues);
+            row.setPass = ReadFresh(setPass, false, ref passCursor, out row.setPassCount, passValues);
+            row.aovGpuMs = ReadFresh(aovGpu, true, ref gpuCursor, out row.aovGpuCount, aovValues);
+            int cpuBefore = cpuCursor;
+            ReadFresh(aovCpu, true, ref cpuCursor, out double? cpuCount, null);
+            for (int sampleIndex = Mathf.Max(0, cpuBefore); sampleIndex < cpuCursor; sampleIndex++)
+                nativeAovCounts.Add(aovCpu.GetSample(sampleIndex).Count);
+            if (cpuCursor < 0) { nativeAovCounts.Clear(); executionDisagreement = true; }
             int? samplerCount = aovSampler != null && aovSampler.isValid && aovSampler.enabled ? aovSampler.sampleBlockCount : (int?)null;
             if (cpuCount.HasValue && samplerCount.HasValue && cpuCount.Value == samplerCount.Value)
                 row.aovExecutions = cpuCount;
@@ -137,7 +147,7 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
                 executionDisagreement = true;
             row.cpuRecorderCount = cpuCount;
             row.cpuSamplerBlocks = samplerCount;
-            Add(drawValues, row.draw); Add(passValues, row.setPass); Add(aovValues, row.aovGpuMs); Add(executions, row.aovExecutions);
+            Add(executions, row.aovExecutions);
             if (FrameTimingManager.GetLatestTimings(1, timingBuffer) > 0
                 && PortalPerformanceMetrics.IsNewTimestamp(timingBuffer[0].frameStartTimestamp, previousTimestamp))
             {
@@ -169,6 +179,10 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
             + "GPU source render frame/mode: unavailable; API provides no source frame ID. read_frame is arrival observation only.\n"
             + "CPU disagreement=" + executionDisagreement + "; raw recorder count and sampler blocks are retained independently.\n");
         context.Save(prefix + "-samples.csv", RawCsv(raw));
+        var nativeSeries = new StringBuilder("native_sample,scope_count\n");
+        for (int index = 0; index < nativeAovCounts.Count; index++)
+            nativeSeries.Append(index).Append(',').Append(nativeAovCounts[index]).Append('\n');
+        context.Save(prefix + "-native-aov.csv", nativeSeries.ToString());
         string summary = round + "," + mode + "," + frames.Length + "," + F(sample.frameMedianMs) + "," + F(PortalPerformanceMetrics.Percentile(frames, 0.95))
             + Stats(gpu) + Stats(cpu) + Stats(main) + Stats(render) + Stats(drawValues) + Stats(passValues) + Stats(aovValues)
             + "," + sample.aovExecutionSamples + "," + F(sample.aovExecutionsMax)
@@ -223,9 +237,12 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         context.Save("available-counters.txt", string.Join("\n", discovered));
     }
 
+    // Ёмкость включает warmup и запас для нескольких native flush за один script frame.
+    // Переполнение не перезаписывает непрочитанные данные: такой поток отвергается целиком.
+    private const int CounterCapacity = 4096;
     private static ProfilerRecorder Start(ProfilerRecorderDescription description, bool gpu) =>
-        ProfilerRecorder.StartNew(description.Category, description.Name, 1,
-            ProfilerRecorderOptions.StartImmediately | ProfilerRecorderOptions.WrapAroundWhenCapacityReached
+        ProfilerRecorder.StartNew(description.Category, description.Name, CounterCapacity,
+            ProfilerRecorderOptions.StartImmediately
             | ProfilerRecorderOptions.SumAllSamplesInFrame | (gpu ? ProfilerRecorderOptions.GpuRecorder : (ProfilerRecorderOptions)0));
     private static void Reset(ref ProfilerRecorder recorder)
     {
@@ -234,14 +251,34 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
         recorder.Reset();
         recorder.Start();
     }
-    private static double? Read(ProfilerRecorder recorder, bool nanoseconds, out double? count)
+    private static double? ReadFresh(ProfilerRecorder recorder, bool nanoseconds, ref int cursor,
+        out double? count, List<double> values)
     {
         count = null;
-        if (!recorder.Valid || !recorder.IsRunning || recorder.Count == 0) return null;
-        ProfilerRecorderSample sample = recorder.GetSample(recorder.Count - 1);
-        if (sample.Value < 0 || sample.Count < 0) return null;
-        count = sample.Count;
-        return nanoseconds ? PortalPerformanceMetrics.NanosecondsToMilliseconds(sample.Value) : sample.Value;
+        if (!recorder.Valid) return null;
+        int available = recorder.Count;
+        if (cursor < 0 || !recorder.IsRunning || recorder.WrappedAround || available >= recorder.Capacity || available < cursor)
+        {
+            cursor = -1;
+            values?.Clear();
+            return null;
+        }
+        double? latest = null;
+        while (cursor < available)
+        {
+            ProfilerRecorderSample sample = recorder.GetSample(cursor++);
+            if (sample.Value < 0 || sample.Count < 0)
+            {
+                cursor = -1;
+                values?.Clear();
+                count = null;
+                return null;
+            }
+            latest = nanoseconds ? PortalPerformanceMetrics.NanosecondsToMilliseconds(sample.Value) : sample.Value;
+            count = sample.Count;
+            values?.Add(latest.Value);
+        }
+        return latest;
     }
     private string CounterSnapshot() => "supportsGpuRecorder=" + SystemInfo.supportsGpuRecorder + "\n"
         + "draw: " + CounterState(draws) + "\nsetPass: " + CounterState(setPass)
@@ -252,7 +289,8 @@ public sealed class PortalPerformanceCheck : MonoBehaviour
     private static string CounterState(ProfilerRecorder recorder)
     {
         if (!recorder.Valid) return "Valid=false; unavailable=exact marker not registered or recorder unsupported";
-        string reason = !recorder.IsRunning ? "collection stopped" : recorder.Count == 0 ? "no sample arrived since reset" : "none";
+        string reason = recorder.WrappedAround || recorder.Count >= recorder.Capacity ? "storage overflow; series invalid"
+            : !recorder.IsRunning ? "collection stopped" : recorder.Count == 0 ? "no sample arrived since mode reset" : "none";
         return "Valid=true; IsRunning=" + recorder.IsRunning + "; Count=" + recorder.Count + "; Capacity=" + recorder.Capacity
             + "; WrappedAround=" + recorder.WrappedAround + "; unit=" + recorder.UnitType + "; data=" + recorder.DataType
             + "; unavailable=" + reason;
