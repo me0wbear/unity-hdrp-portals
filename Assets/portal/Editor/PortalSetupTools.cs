@@ -82,6 +82,57 @@ public static class PortalSetupTools
         }
     }
 
+    /// <summary>
+    /// Готовит выделенный корень игрока стороннего контроллера к проходу сквозь
+    /// порталы: вешает путешественника и мост камеры, находит камеру среди
+    /// потомков и связывает поля. Написан ради UHFPS — его игрока модуль не
+    /// может поставить префабом, потому что не ссылается на ассет, — но делает
+    /// ровно ручные шаги из SETUP.md и потому годится любому контроллеру.
+    /// </summary>
+    [MenuItem("Tools/Portals/Prepare UHFPS Player")]
+    public static void PrepareUhfpsPlayer()
+    {
+        GameObject root = Selection.activeGameObject;
+        if (root == null)
+        {
+            Debug.LogWarning("[PortalSetupTools] select the player root first: "
+                + "the components go on the object the controller moves");
+            return;
+        }
+
+        Camera camera = root.GetComponentInChildren<Camera>(true);
+        if (camera == null)
+        {
+            Debug.LogWarning("[PortalSetupTools] " + root.name + " has no camera among "
+                + "its children; the view point will need to be assigned by hand");
+        }
+
+        if (!root.TryGetComponent(out PortalTraveller traveller))
+        {
+            traveller = root.AddComponent<PortalTraveller>();
+        }
+
+        if (!root.TryGetComponent(out PortalCameraBridge bridge))
+        {
+            bridge = root.AddComponent<PortalCameraBridge>();
+        }
+
+        // Поля закрытые, поэтому связываются через сериализованное представление,
+        // как и при сборке префабов.
+        if (camera != null)
+        {
+            SetReference(traveller, "viewPoint", camera.transform);
+            SetReference(bridge, "gameplayCamera", camera);
+        }
+
+        SetReference(bridge, "traveller", traveller);
+
+        EditorUtility.SetDirty(root);
+        Debug.Log("[PortalSetupTools] prepared " + root.name
+            + (camera != null ? " with camera " + camera.name : " without a camera")
+            + "; run Wire Scene so every portal gets the same camera");
+    }
+
     /// <summary>Докладывает про каждый портал, чего ему не хватает для работы.</summary>
     [MenuItem("Tools/Portals/Validate Scene")]
     public static void ValidateScene()
@@ -170,5 +221,21 @@ public static class PortalSetupTools
         }
 
         return camera;
+    }
+
+    private static void SetReference(Object target, string field, Object value)
+    {
+        var serialized = new SerializedObject(target);
+        SerializedProperty property = serialized.FindProperty(field);
+
+        if (property == null)
+        {
+            Debug.LogError("[PortalSetupTools] " + target.GetType().Name
+                + " has no serialized field " + field);
+            return;
+        }
+
+        property.objectReferenceValue = value;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
     }
 }
