@@ -4,9 +4,10 @@
 ![HDRP 17.x](https://img.shields.io/badge/HDRP-17.x-57b9d3.svg?style=flat&logo=unity)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
 
-Walk-through portals for Unity 6 and HDRP. The view inside the opening lives under
-the same exposure, tonemapping and antialiasing as the rest of the frame, so the
-frame before you cross and the frame after are the same picture.
+Walk-through portals for Unity 6 and HDRP. The view inside the opening shares
+exposure, tonemapping and antialiasing with the rest of the frame. Exact visual
+parity across a crossing is still being validated; sharing post-processing alone
+does not establish it.
 
 ![Looking through a portal at an angle](.github/images/portal-angle.png)
 
@@ -81,8 +82,9 @@ portal is missing, if anything.
 
 The `Portal` inspector fields worth knowing:
 
-- **Recursion Depth** — how many times a portal is seen inside itself. `0` means
-  no recursion. Each level costs one camera and one screen-sized target.
+- **Recursion Depth** — the maximum number of times a portal is seen inside
+  itself. `0` still renders the destination once. Each active level costs one
+  camera and one screen-sized target.
 - **Resolution Divider** — `1` renders the view at screen resolution, pixel for
   pixel. Raise it to trade sharpness for frame time.
 - **Write Content Depth** — writes the real distance to what is visible through
@@ -93,6 +95,19 @@ The `Portal` inspector fields worth knowing:
   moment you cross.
 
 ## How it works
+
+With **Cull When Offscreen** enabled, the scheduler removes recursion levels
+whose physical openings cannot contribute to the parent view. Visible roots get
+one level before extra recursion is allocated; larger screen coverage takes
+priority when the global budget cannot serve every root. Unused cameras and
+targets are retained for reuse, so the budget limits active rendering, not cached
+memory. A returning level resets its history after its new pose is applied.
+
+The optimized child-visibility path currently covers supported perspective views
+with AA=None and HDRP camera-relative rendering. TAA, dynamic resolution and
+custom projections retain conservative child recursion without changing quality.
+Uncertain geometry also retains levels. Disabling **Cull When Offscreen** opts
+out of this scheduling optimization; it does not bypass the global budget.
 
 A virtual camera per recursion level renders into a screen-sized target. The
 quad samples that target by **screen-space UV**, not by its own UV map, so the
@@ -118,9 +133,11 @@ exactly what many controllers do during a teleport.
 
 ## What is verified
 
-The repository carries a test lab under `Assets/LabTools` — 49 EditMode tests plus
-scene checks that build a player, walk a scripted path and measure the frames.
-Numbers below are from an RTX 5080 at 1280x720.
+The repository carries EditMode tests and a test lab under `Assets/LabTools`,
+including scene checks that build a player and measure frames. The table below
+contains historical measurements from an RTX 5080 at 1280x720, not certification
+of the current revision. Current checks retain build identity, raw measurements
+and native exit codes; a nonzero exit or unresolved visual control is not a pass.
 
 | Check | Measures | Result |
 | --- | --- | --- |
@@ -138,9 +155,13 @@ execute a compute shader and need a graphics device; batch runs with
 GPU checks on Windows. Crossing tests include diagonal movement, fast segments
 and portal/traveller reactivation.
 
-Known state: the **Seam** check does not build right now, failing with
-`level0 is corrupted` during scene serialization. It fails identically on
-unmodified code, so it is an environment problem rather than a regression.
+Current validation state: the isolated **Seam** build-copy check now builds, but
+its visual acceptance threshold is not calibrated. D3D12 shutdown crashes have
+also occurred in validation players, including baseline controls. Neither a
+successful build nor complete measurement output overrides these unresolved
+results. Use `tools/check.sh Visibility` for recursion/binding controls and
+`tools/check.sh Performance` for the repeated default/depth0 comparison; the full
+performance gate also requires removal of the additional AOV render.
 
 ## Limitations
 

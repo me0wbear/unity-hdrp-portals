@@ -243,16 +243,28 @@ D3D12, 1280×720, исходная Sandbox без сохранения изме�
 Проверка использует существующие `Recursion_Pair` и `Recursion_Marker`.
 Eye (20,1.75,14), yaw −90/+90 смотрит в A/B. Активен root одной стороны,
 компонент второго Portal отключён, но его screen остаётся consumer. Для каждой
-стороны сравниваются depth4 с culling opt-out, depth0 и depth4 с оптимизацией.
+стороны независимо выполняются R1/O/R2: depth4 с culling opt-out, depth4 с
+оптимизацией, повтор opt-out. Depth0 positive выполняется только после triple.
 Lens, AA=None, render settings, AOV и разрешение RT не меняются.
 Центральный ROI снизу слева (480,200,320,320) содержит 102400 пикселей.
-Reference/optimized RGB должны совпадать точно. Depth0 обязан показать отличие:
+Reference/optimized RGB должны совпадать точно с обоими references. R1/R2 должны
+совпадать точно; иначе этот triple остаётся unresolved/Blocked, без допуска на шум.
+Разница O с воспроизводимым reference или нарушение lifecycle остаётся Failed,
+даже если другой triple оказался невоспроизводимым. Depth0 обязан показать отличие:
 max channel difference ≥16 и средняя RGB MAE ≥0.5 в 8-bit units; иначе Blocked.
 
-Hide/reentry не отключает root и не вызывает ResetHistory. Сохраняются первый
-кадр возврата и settled кадр, ссылки на камеры/RT и HDRP history counter перед
-первым render. Settled должен совпасть с reference; first/settled сохраняется
-как диагностическая разность, не как сертификация TAA или motion.
+Перед каждым независимым arm одинаково подготавливается capacity; затем новая
+поза, HDCamera.GetOrCreate(main,0).Reset() и PortalSystem.ResetHistory().
+Capture приходится на 40-й завершённый main render после reset, не на 40-й
+coroutine yield. Часы считают endCameraRendering только main; screenshot остаётся
+в соответствующем WaitForEndOfFrame. Time, Cinemachine и эффекты не переопределяются.
+
+Reentry R1/O/R2 использует одинаковую траекторию: visible40, hidden4, first return1,
+settled return40. В reference cull=false и Budget0 только на hidden-интервале;
+optimized при Budget8 приостанавливается обычным culling. Внутри траектории
+нет ручного ResetHistory, disable/recreate. Сравниваются visible/first/settled
+с теми же стадиями двух references, а не с исходным статическим кадром.
+Разность first/settled каждого arm сохраняется отдельно как диагностика.
 
 Для бюджета создаются ровно три неактивных клона существующей пары в runtime
 build-copy, без старых камер. После конфигурации активируется один root каждой
@@ -263,9 +275,24 @@ build-copy, без старых камер. После конфигурации 
 после starvation. Идентичность cloned cameras записана в observation JSON;
 общий Sandbox metadata helper не классифицирует runtime-клоны как исходные portals.
 
-Артефакты: 15 PNG с metadata/observation JSON, `visibility-evidence.json`,
-`reentry-first-vs-settled.json`, `visibility-contract.txt` и стандартный result.
-Недостающий fixture/evidence даёт Blocked; нарушения наблюдаемых инвариантов — Failed.
+Дополнительный parented ordinary контроль использует один runtime-клон исходной
+пары и её маркер. Eye (13.25,11.5,27.75), rotation (17,31,7); Player находится под
+parent с position (2,3,4), rotation (11,23,5). Side-by-side depth2 обязан дать
+reference3/optimized1/reference3 и exact RGB; независимый Budget0 no-view capture
+обязан пройти те же positive thresholds. Высота оставляет fixture над Sandbox
+ground. Это не сертификация arbitrary custom views или рекурсивных viewport edges.
+
+Артефакты schema2: 30 PNG с metadata/observation JSON, `visibility-evidence.json`,
+шесть `*-triple.json`, три `reentry-*-first-vs-settled.json`,
+`visibility-contract.txt` и стандартный result. В observation добавлены main и
+virtual camera IDs, активность, history до/после, completed renders, точные
+float-массивы pose/view/projection, Unity/HDRP time и настройки temporal effects.
+Основной metadata gate сопоставляет main и общие активные уровни каждого triple:
+конечные и одинаковые pose/matrices, равные history epochs и completed counts.
+Неактивные child уровни parented 1-vs-3 не сравниваются. Различное абсолютное
+время допустимо и записывается для диагностики. Missing/mismatched metadata —
+Blocked; нарушения наблюдаемых lifecycle-инвариантов — Failed.
+Архивные 15-capture файлы и исходный policy Evaluate не изменяются.
 Editor tests не заменяют этот actual Player-контроль.
 
 Для legacy build-only используйте `PortalVisibilityCheckBuilder.BuildLegacy`,
