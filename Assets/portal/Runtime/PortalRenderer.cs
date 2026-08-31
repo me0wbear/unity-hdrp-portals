@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -29,10 +30,39 @@ public sealed class PortalRenderer
     /// </summary>
     private const float MinimumNearClip = 0.02f;
 
+    /// <summary>Прямоугольник, покрывающий весь кадр: xy — угол, zw — размер.</summary>
+    private static readonly Vector4 FullRect = new Vector4(0f, 0f, 1f, 1f);
+
+    // Прямоугольник кадра каждой живой камеры уровня. Система читает его перед
+    // рендером камеры и сообщает шейдерам глобальным параметром: квад выбирает
+    // вид по экранным координатам, и камере, рисующей только часть кадра, нужно
+    // знать, какую именно.
+    private static readonly Dictionary<Camera, Vector4> ViewRects =
+        new Dictionary<Camera, Vector4>();
+
+    /// <summary>Прямоугольник кадра камеры уровня; полный кадр для остальных камер.</summary>
+    internal static Vector4 ViewRectFor(Camera camera)
+    {
+        return ViewRects.TryGetValue(camera, out Vector4 rect) ? rect : FullRect;
+    }
+
+    /// <summary>Сброс статики при запуске; вызывается из PortalSystem.</summary>
+    internal static void ResetStatics()
+    {
+        ViewRects.Clear();
+    }
+
     private readonly Portal _portal;
 
     private Camera[] _cameras = System.Array.Empty<Camera>();
     private RenderTexture[] _targets = System.Array.Empty<RenderTexture>();
+
+    /// <summary>
+    /// Прямоугольники кадра по уровням: какую область кадра наблюдателя рисует
+    /// каждый уровень. Полный кадр, когда ограничение области выключено.
+    /// </summary>
+    private Vector4[] _levelRects = System.Array.Empty<Vector4>();
+
     private bool _subscribed;
     private bool _reported;
 
@@ -95,6 +125,23 @@ public sealed class PortalRenderer
         Subscribe();
         EnsureCapacity(levels, viewer);
         _active = true;
+
+        // Запас проекции следа квада: пара пикселей на дрожание выборки и
+        // билинейную фильтрацию по краю области.
+        Vector2 padding = new Vector2(
+            2f / Mathf.Max(viewer.pixelWidth, 1),
+            2f / Mathf.Max(viewer.pixelHeight, 1));
+
+        // Нулевой уровень рисует область кадра, которую занимает проём в кадре
+        // наблюдателя. Каждый следующий уровень — след вложенного квада внутри
+        // области своего родителя.
+        Vector4 rect = _portal.restrictViewToOpening
+            ? QuadRect(
+                viewer.nonJitteredProjectionMatrix * viewer.worldToCameraMatrix,
+                _portal.screen.transform,
+                padding)
+            : FullRect;
+
         for (int level = 0; level < _cameras.Length; level++)
         {
             Camera camera = _cameras[level];
@@ -116,7 +163,14 @@ public sealed class PortalRenderer
                 * viewer.transform.localToWorldMatrix;
 
             camera.transform.SetPositionAndRotation(pose.GetColumn(3), pose.rotation);
-            ApplyProjection(viewer, camera);
+
+            // Пустой след возможен только у уровней глубже нулевого — у нулевого
+            // видимость уже проверена, а пустота отсекла бы рекурсию ниже.
+            _levelRects[level] = rect;
+            ViewRects[camera] = rect;
+            camera.rect = new Rect(rect.x, rect.y, rect.z, rect.w);
+
+            Matrix4x4 fullProjection = ApplyProjection(viewer, camera, rect);
 
             // Уровень, который в прошлом кадре не рисовался, приходит со
             // сведениями о прошлом кадре от своей прежней позы, а она может быть
@@ -149,10 +203,22 @@ public sealed class PortalRenderer
             // входа попадает в кадр, лишь когда пара стоит лицом к лицу. Если не
             // виден ни один, рекурсия заканчивается здесь: более глубокие камеры
             // выключаются и бюджета системы не занимают, хотя сцена этого уровня
-            // без них не отличается ни одним пикселем.
-            if (_portal.cullWhenOffscreen && level + 1 < _levels && !DeeperLevelVisible(camera))
+            // без них не отличается ни одним пикселем. Заодно считается след
+            // видимых квадов — он же область кадра следующего уровня.
+            if (level + 1 < _levels)
             {
-                _levels = level + 1;
+                if (TryDeeperRect(camera, fullProjection, rect, padding, out Vector4 deeper))
+                {
+                    rect = _portal.restrictViewToOpening ? deeper : FullRect;
+                }
+                else if (_portal.cullWhenOffscreen)
+                {
+                    _levels = level + 1;
+                }
+                else
+                {
+                    rect = FullRect;
+                }
             }
         }
     }
@@ -235,6 +301,7 @@ public sealed class PortalRenderer
         {
             if (_cameras[i] != null)
             {
+                ViewRects.Remove(_cameras[i]);
                 _cameras[i].targetTexture = null;
                 _cameras[i].enabled = false;
                 Object.Destroy(_cameras[i].gameObject);
@@ -252,6 +319,7 @@ public sealed class PortalRenderer
         _cameras = System.Array.Empty<Camera>();
         _targets = System.Array.Empty<RenderTexture>();
         _rendered = System.Array.Empty<bool>();
+        _levelRects = System.Array.Empty<Vector4>();
         _levels = 0;
         _active = false;
 
@@ -353,7 +421,9 @@ public sealed class PortalRenderer
         // здесь, после того как все уровни уже посчитаны.
         if (ReferenceEquals(camera, _portal.playerCamera))
         {
-            _portal.SetViewTexture(_targets[0]);            _portal.SetContentBuffers(_contentDepth, ContentInverseProjection);
+            Vector4 viewRect = _levelRects.Length > 0 ? _levelRects[0] : FullRect;
+            _portal.SetViewTexture(_targets[0], viewRect);
+            _portal.SetContentBuffers(_contentDepth, ContentInverseProjection, viewRect);
             return;
         }
 
@@ -366,8 +436,10 @@ public sealed class PortalRenderer
         // Камера уровня k смотрит на парный портал. В её кадре парный портал
         // должен показывать то, что нарисовал уровень k+1. У самого глубокого
         // уровня источника нет, и проём заливается цветом заглушки.
-        Texture content = level + 1 < _levels ? _targets[level + 1] : null;
-        _portal.exitPortal.SetViewTexture(content);
+        bool hasDeeper = level + 1 < _levels;
+        Texture content = hasDeeper ? _targets[level + 1] : null;
+        Vector4 contentRect = hasDeeper ? _levelRects[level + 1] : FullRect;
+        _portal.exitPortal.SetViewTexture(content, contentRect);
 
         // Свой квад получает то же самое, и это не перестраховка. Когда пара
         // стоит лицом к лицу, камера уровня k смотрит из-за парного портала
@@ -379,7 +451,7 @@ public sealed class PortalRenderer
         // Порядок делает остальное: уровни рисуются от глубокого к нулевому, а
         // наблюдатель последним, и его событие возвращает на квад таргет нулевого
         // уровня. То есть подмена живёт ровно те кадры, пока считается рекурсия.
-        _portal.SetViewTexture(content);
+        _portal.SetViewTexture(content, contentRect);
     }
 
     /// <summary>
@@ -447,17 +519,111 @@ public sealed class PortalRenderer
     private readonly Plane[] _levelPlanes = new Plane[6];
 
     /// <summary>
-    /// Виден ли из камеры уровня хотя бы один квад, на котором появится
-    /// результат более глубокого уровня. Содержимое следующего уровня кладётся
-    /// на квады обоих порталов пары (см. <see cref="OnBeginCameraRendering"/>),
-    /// поэтому проверяются оба.
+    /// Считает след квадов, на которых появится результат более глубокого
+    /// уровня, в кадре камеры уровня. Содержимое следующего уровня кладётся на
+    /// квады обоих порталов пары (см. <see cref="OnBeginCameraRendering"/>),
+    /// поэтому берётся объединение их следов, пересечённое с областью самого
+    /// уровня: за её пределами он ничего не рисует. Пустой след означает, что
+    /// более глубокий уровень не виден и не нужен.
+    ///
+    /// Видимость проверяется по настоящей пирамиде камеры — с суженной и косой
+    /// проекцией, — а след считается полной проекцией: прямоугольники всех
+    /// уровней живут в долях кадра наблюдателя, чтобы выборка по экранным
+    /// координатам оставалась сквозной для всей цепочки.
     /// </summary>
-    private bool DeeperLevelVisible(Camera levelCamera)
+    private bool TryDeeperRect(
+        Camera levelCamera,
+        Matrix4x4 fullProjection,
+        Vector4 levelRect,
+        Vector2 padding,
+        out Vector4 rect)
     {
-        GeometryUtility.CalculateFrustumPlanes(levelCamera, _levelPlanes);
+        rect = default;
 
-        return QuadVisible(_portal, levelCamera, _levelPlanes)
-            || QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes);
+        GeometryUtility.CalculateFrustumPlanes(levelCamera, _levelPlanes);
+        Matrix4x4 viewProjection = fullProjection * levelCamera.worldToCameraMatrix;
+
+        bool found = false;
+        if (QuadVisible(_portal, levelCamera, _levelPlanes))
+        {
+            rect = QuadRect(viewProjection, _portal.screen.transform, padding);
+            found = true;
+        }
+
+        if (_portal.exitPortal != null
+            && QuadVisible(_portal.exitPortal, levelCamera, _levelPlanes))
+        {
+            Vector4 exitRect = QuadRect(
+                viewProjection, _portal.exitPortal.screen.transform, padding);
+            rect = found ? UnionRects(rect, exitRect) : exitRect;
+            found = true;
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+
+        rect = IntersectRects(rect, levelRect);
+        return rect.z > 0f && rect.w > 0f;
+    }
+
+    /// <summary>
+    /// След квада в кадре: проекция четырёх углов с запасом
+    /// <paramref name="padding"/>, прижатая к границам кадра. Угол за камерой
+    /// делает след полным кадром: спроецировать его нельзя, а ошибиться в
+    /// тесную сторону значило бы срезать видимое. Так происходит вплотную к
+    /// переходу, и ограничение области там само отключается.
+    /// </summary>
+    private static Vector4 QuadRect(Matrix4x4 viewProjection, Transform quad, Vector2 padding)
+    {
+        Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 max = new Vector2(float.MinValue, float.MinValue);
+
+        for (int corner = 0; corner < 4; corner++)
+        {
+            Vector3 local = new Vector3(
+                (corner & 1) == 0 ? -0.5f : 0.5f,
+                (corner & 2) == 0 ? -0.5f : 0.5f,
+                0f);
+
+            Vector3 world = quad.TransformPoint(local);
+            Vector4 clip = viewProjection * new Vector4(world.x, world.y, world.z, 1f);
+
+            if (clip.w <= 1e-4f)
+            {
+                return FullRect;
+            }
+
+            Vector2 point = new Vector2(
+                clip.x / clip.w * 0.5f + 0.5f,
+                clip.y / clip.w * 0.5f + 0.5f);
+
+            min = Vector2.Min(min, point);
+            max = Vector2.Max(max, point);
+        }
+
+        min = Vector2.Max(min - padding, Vector2.zero);
+        max = Vector2.Min(max + padding, Vector2.one);
+        return new Vector4(min.x, min.y, max.x - min.x, max.y - min.y);
+    }
+
+    private static Vector4 UnionRects(Vector4 a, Vector4 b)
+    {
+        float minX = Mathf.Min(a.x, b.x);
+        float minY = Mathf.Min(a.y, b.y);
+        float maxX = Mathf.Max(a.x + a.z, b.x + b.z);
+        float maxY = Mathf.Max(a.y + a.w, b.y + b.w);
+        return new Vector4(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    private static Vector4 IntersectRects(Vector4 a, Vector4 b)
+    {
+        float minX = Mathf.Max(a.x, b.x);
+        float minY = Mathf.Max(a.y, b.y);
+        float maxX = Mathf.Min(a.x + a.z, b.x + b.z);
+        float maxY = Mathf.Min(a.y + a.w, b.y + b.w);
+        return new Vector4(minX, minY, maxX - minX, maxY - minY);
     }
 
     /// <summary>
@@ -512,6 +678,7 @@ public sealed class PortalRenderer
         _cameras = new Camera[levels];
         _targets = new RenderTexture[levels];
         _rendered = new bool[levels];
+        _levelRects = new Vector4[levels];
         _levels = levels;
 
         for (int level = 0; level < levels; level++)
@@ -547,7 +714,25 @@ public sealed class PortalRenderer
             width, height, GraphicsFormat.R32_SFloat, _portal.name + "_ContentDepth");
         _contentDepth = RTHandles.Alloc(_contentDepthTexture);
 
-        PortalContentDepthCopyPass.Register(_cameras[0], _contentDepth);
+        PortalContentDepthCopyPass.Register(_cameras[0], this);
+    }
+
+    /// <summary>Текстура глубины содержимого; для прохода копирования.</summary>
+    internal RTHandle ContentDepthTarget => _contentDepth;
+
+    /// <summary>
+    /// Пиксельная область текстуры глубины, которую занимает кадр нулевого
+    /// уровня. Берётся у самой камеры: пайплайн вычисляет свой вьюпорт из того
+    /// же прямоугольника, и копия обязана лечь в те же пиксели, что и цвет.
+    /// </summary>
+    internal Rect ContentCopyViewport
+    {
+        get
+        {
+            return _cameras.Length > 0 && _cameras[0] != null
+                ? _cameras[0].pixelRect
+                : new Rect(0f, 0f, 0f, 0f);
+        }
     }
 
     private static RenderTexture CreateContentTexture(
@@ -688,7 +873,12 @@ public sealed class PortalRenderer
     /// Порядок важен: поза камере уже выставлена, потому что плоскость считается
     /// в её пространстве через worldToCameraMatrix.
     /// </summary>
-    private void ApplyProjection(Camera viewer, Camera camera)
+    /// <summary>
+    /// Возвращает полную (несуженную) матрицу проекции камеры: по ней считаются
+    /// следы квадов, потому что прямоугольники уровней живут в долях полного
+    /// кадра наблюдателя.
+    /// </summary>
+    private Matrix4x4 ApplyProjection(Camera viewer, Camera camera, Vector4 rect)
     {
         CopyLens(viewer, camera);
 
@@ -720,7 +910,15 @@ public sealed class PortalRenderer
         // наклон накапливался бы кадр за кадром, и вид схлопнулся бы в полосу.
         camera.ResetProjectionMatrix();
 
-        Matrix4x4 projection = camera.projectionMatrix;
+        Matrix4x4 fullProjection = camera.projectionMatrix;
+
+        // Сужение до области проёма идёт до косого отсечения: CalculateObliqueMatrix
+        // читает текущую матрицу камеры, поэтому суженная назначается ей сразу.
+        // Для полного кадра сужение вырождается в тождество, и путь один на оба
+        // режима.
+        Matrix4x4 projection = RestrictProjection(fullProjection, rect);
+        camera.projectionMatrix = projection;
+
         if (obliqueUsable)
         {
             Vector4 plane = PortalMath.CameraSpacePlane(
@@ -753,11 +951,40 @@ public sealed class PortalRenderer
         // taaJitter уже поделены на размер экрана, но не удвоены. С одинарным
         // значением содержимое проёма дрожит вдвое слабее окружения, и
         // временное сглаживание собирает его иначе, чем остальной кадр.
+        //
+        // Деление на размер области переводит сдвиг из долей полного кадра в
+        // доли суженного: содержимое должно дрожать на те же пиксели экрана,
+        // а единица NDC суженной проекции покрывает лишь часть кадра.
         Vector4 jitter = HDCamera.GetOrCreate(viewer).taaJitter;
-        projection.m02 += 2f * jitter.z;
-        projection.m12 += 2f * jitter.w;
+        projection.m02 += 2f * jitter.z / rect.z;
+        projection.m12 += 2f * jitter.w / rect.w;
 
         camera.projectionMatrix = projection;
+        return fullProjection;
+    }
+
+    /// <summary>
+    /// Сужает матрицу проекции до прямоугольника кадра: область растягивается
+    /// на всю пирамиду камеры. Плотность пикселей при вьюпорте того же
+    /// прямоугольника не меняется — рисуются ровно те же пиксели, что рисовал
+    /// бы полный кадр, просто без остальных. Для полного прямоугольника —
+    /// тождество.
+    /// </summary>
+    private static Matrix4x4 RestrictProjection(Matrix4x4 projection, Vector4 rect)
+    {
+        // Центр области в NDC и её размер как доля полукадра.
+        float centreX = rect.x * 2f + rect.z - 1f;
+        float centreY = rect.y * 2f + rect.w - 1f;
+
+        for (int column = 0; column < 4; column++)
+        {
+            projection[0, column] =
+                (projection[0, column] - centreX * projection[3, column]) / rect.z;
+            projection[1, column] =
+                (projection[1, column] - centreY * projection[3, column]) / rect.w;
+        }
+
+        return projection;
     }
 
     /// <summary>

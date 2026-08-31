@@ -25,6 +25,12 @@ public sealed class Portal : MonoBehaviour
     [Tooltip("Сколько раз портал виден сам через себя. 0 — без рекурсии.")]
     [Min(0)] public int recursionDepth = 2;
 
+    [Tooltip("Рендерить виртуальными камерами только область кадра, которую "
+        + "занимает проём. Изображение то же и той же плотности пикселей, но "
+        + "полноэкранные проходы HDRP и отбор геометрии оплачиваются по "
+        + "площади проёма, а не всего кадра.")]
+    public bool restrictViewToOpening = true;
+
     [Tooltip("Оставить на виртуальных камерах экранные эффекты HDRP, читающие "
         + "глубину: затенение, отражения, глобальное освещение, контактные тени. "
         + "По умолчанию они выключены: проекция виртуальной камеры косая, HDRP "
@@ -76,6 +82,11 @@ public sealed class Portal : MonoBehaviour
     private static readonly int HasTextureId = Shader.PropertyToID("_HasTexture");
     private static readonly int ContentDepthId = Shader.PropertyToID("_ContentDepth");
     private static readonly int InverseProjectionId = Shader.PropertyToID("_PortalInverseProjection");
+    private static readonly int ContentRectId = Shader.PropertyToID("_PortalContentRect");
+    private static readonly int ViewRectId = Shader.PropertyToID("_PortalViewRect");
+
+    /// <summary>Прямоугольник, покрывающий весь кадр: xy — угол, zw — размер.</summary>
+    private static readonly Vector4 FullFrameRect = new Vector4(0f, 0f, 1f, 1f);
     private MaterialPropertyBlock _block;
     private Vector2 _openingSize;
     private bool _openingSizeKnown;
@@ -138,6 +149,17 @@ public sealed class Portal : MonoBehaviour
     /// </summary>
     public void SetViewTexture(Texture texture)
     {
+        SetViewTexture(texture, FullFrameRect);
+    }
+
+    /// <summary>
+    /// То же, с прямоугольником кадра, в котором лежит содержимое текстуры.
+    /// Уровень, ограниченный областью проёма, заполняет только часть своего
+    /// таргета; выборка за её пределами прижимается к границе, чтобы на краях
+    /// не поднимать пиксели, которых уровень не рисовал.
+    /// </summary>
+    public void SetViewTexture(Texture texture, Vector4 contentRect)
+    {
         ViewTexture = texture;
 
         if (screen == null)
@@ -153,6 +175,7 @@ public sealed class Portal : MonoBehaviour
         _block.SetTexture(MainTextureId, texture != null ? texture : Texture2D.blackTexture);
         _block.SetFloat(HasTextureId, texture != null ? 1f : 0f);
         _block.SetColor(FallbackColorId, fallbackColor);
+        _block.SetVector(ContentRectId, contentRect);
 
         screen.SetPropertyBlock(_block);
     }
@@ -165,6 +188,16 @@ public sealed class Portal : MonoBehaviour
     /// </summary>
     public void SetContentBuffers(Texture depth, Matrix4x4 inverseProjection)
     {
+        SetContentBuffers(depth, inverseProjection, FullFrameRect);
+    }
+
+    /// <summary>
+    /// То же, с прямоугольником кадра, который рендерил нулевой уровень.
+    /// Обратная матрица проекции описывает только эту область, поэтому проход
+    /// подмены глубины обязан пересчитывать экранные координаты в её долях.
+    /// </summary>
+    public void SetContentBuffers(Texture depth, Matrix4x4 inverseProjection, Vector4 viewRect)
+    {
         if (screen == null)
         {
             return;
@@ -175,6 +208,7 @@ public sealed class Portal : MonoBehaviour
 
         _block.SetTexture(ContentDepthId, depth != null ? depth : Texture2D.blackTexture);
         _block.SetMatrix(InverseProjectionId, inverseProjection);
+        _block.SetVector(ViewRectId, viewRect);
 
         screen.SetPropertyBlock(_block);
     }
