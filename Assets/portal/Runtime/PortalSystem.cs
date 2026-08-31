@@ -96,6 +96,15 @@ public sealed class PortalSystem : MonoBehaviour
         passVolume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
         passVolume.AddPassOfType<PortalCompositePass>();
 
+        // Глубина содержимого снимается копией с уже посчитанного кадра
+        // виртуальной камеры, отдельным проходом. Точка впрыска — перед
+        // пост-обработкой: прозрачная геометрия к этому моменту уже записала
+        // свою глубину, а сам буфер ещё не тронут пост-эффектами.
+        var depthCopyVolume = host.AddComponent<CustomPassVolume>();
+        depthCopyVolume.isGlobal = true;
+        depthCopyVolume.injectionPoint = CustomPassInjectionPoint.BeforePostProcess;
+        depthCopyVolume.AddPassOfType<PortalContentDepthCopyPass>();
+
         // Порядок вызова OnDestroy при выходе не определён, а камеры порталов
         // держат таргеты и подписку на события пайплайна. Освобождаем их по
         // явному сигналу выхода, пока пайплайн ещё жив.

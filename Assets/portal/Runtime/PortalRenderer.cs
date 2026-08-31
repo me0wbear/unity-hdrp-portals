@@ -137,8 +137,9 @@ public sealed class PortalRenderer
 
             if (level == 0)
             {
-                // AOV содержит аппаратную глубину: диапазон Z и направление Y
-                // должны совпадать с проекцией, использованной при рендере в RT.
+                // Буфер глубины содержимого хранит аппаратную глубину: диапазон Z
+                // и направление Y должны совпадать с проекцией, использованной
+                // при рендере в RT.
                 ContentInverseProjection = GL.GetGPUProjectionMatrix(camera.projectionMatrix, true).inverse;
             }
 
@@ -524,10 +525,11 @@ public sealed class PortalRenderer
     }
 
     /// <summary>
-    /// Просит у пайплайна глубину и векторы движения нулевого уровня. Это
-    /// единственный публичный способ получить промежуточные буферы кадра, а не
-    /// только итоговую картинку: пайплайн сам скопирует их в выданные здесь
-    /// текстуры в конце своего кадра.
+    /// Готовит текстуру глубины содержимого и подписывает нулевой уровень на её
+    /// заполнение. Глубина снимается копией с уже посчитанного кадра виртуальной
+    /// камеры проходом <see cref="PortalContentDepthCopyPass"/>. Запрос AOV для
+    /// этого не годится: HDRP выполняет для каждого запроса AOV отдельный полный
+    /// рендер камеры, то есть сцена нулевого уровня считалась бы дважды за кадр.
     /// </summary>
     private void RequestContentBuffers(int width, int height)
     {
@@ -545,20 +547,7 @@ public sealed class PortalRenderer
             width, height, GraphicsFormat.R32_SFloat, _portal.name + "_ContentDepth");
         _contentDepth = RTHandles.Alloc(_contentDepthTexture);
 
-        if (!_cameras[0].TryGetComponent(out HDAdditionalCameraData data))
-        {
-            return;
-        }
-
-        var builder = new AOVRequestBuilder();
-        builder.Add(
-            AOVRequest.NewDefault(),
-            AllocateContentBuffer,
-            null,
-            new[] { AOVBuffers.DepthStencil },
-            (cmd, buffers, properties) => { });
-
-        data.SetAOVRequests(builder.Build());
+        PortalContentDepthCopyPass.Register(_cameras[0], _contentDepth);
     }
 
     private static RenderTexture CreateContentTexture(
@@ -595,23 +584,11 @@ public sealed class PortalRenderer
         }
     }
 
-    private RTHandle AllocateContentBuffer(AOVBuffers bufferId)
-    {
-        switch (bufferId)
-        {
-            case AOVBuffers.DepthStencil:
-                return _contentDepth;            default:
-                return null;
-        }
-    }
-
     private void ReleaseContentBuffers()
     {
-        if (_cameras.Length > 0
-            && _cameras[0] != null
-            && _cameras[0].TryGetComponent(out HDAdditionalCameraData data))
+        if (_cameras.Length > 0 && _cameras[0] != null)
         {
-            data.SetAOVRequests(null);
+            PortalContentDepthCopyPass.Unregister(_cameras[0]);
         }
 
         ReleaseContentTexture(ref _contentDepth, ref _contentDepthTexture);
