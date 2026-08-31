@@ -24,8 +24,20 @@ public sealed class PortalCameraBridge : MonoBehaviour
 
     [SerializeField]
     [Tooltip("Сбрасывать историю кадров HDRP на переходе. Без сброса один кадр "
-        + "идёт с векторами движения, посчитанными от позы до перехода.")]
+        + "идёт с векторами движения, посчитанными от позы до перехода. Сброс "
+        + "перезапускает и адаптацию автоматической экспозиции: при "
+        + "автоэкспозиции в сцене это читается как моргание в кадр перехода. "
+        + "Выбор из двух зол; с фиксированной экспозицией сброс безвреден.")]
     private bool resetCameraHistory = true;
+
+    [SerializeField]
+    [Tooltip("Как согласовать сохранённый угол взгляда UHFPS с поворотом "
+        + "перехода. Документация UHFPS держит поворот корня игрока нулевым и "
+        + "переносит направление в look rotation; если с режимом добавки камера "
+        + "после перехода разворачивается в прежнюю мировую сторону или "
+        + "поворот удваивается, переключить на TransferRootYaw. Лог адаптера "
+        + "показывает, какие члены UHFPS он нашёл.")]
+    private UhfpsLookMode uhfpsLookMode = UhfpsLookMode.AddYawDelta;
 
     private PortalUhfpsAdapter _uhfps;
 
@@ -81,7 +93,7 @@ public sealed class PortalCameraBridge : MonoBehaviour
     private void OnTeleported(PortalTeleportContext context)
     {
         CameraWarped?.Invoke(context, gameplayCamera);
-        _uhfps.Apply(context);
+        _uhfps.Apply(context, uhfpsLookMode, transform);
         ResetCameraHistory();
 
         // Виртуальные камеры порталов прыгнули вместе с наблюдателем, и их

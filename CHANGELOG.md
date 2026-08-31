@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `restrictViewToOpening`: virtual cameras render only the screen rectangle the
+  opening occupies, at unchanged pixel density. HDRP's resolution-dependent
+  passes and per-level culling are paid per opening area; on the sandbox probe a
+  visible portal falls from 4.4-5.1 ms to about 1.5 ms across this and the two
+  changes below.
+- `screenSpaceEffectsInView`: ambient occlusion, screen space reflections and
+  global illumination, and contact shadows are off on virtual cameras by
+  default. HDRP linearises depth with a formula that is wrong for their oblique
+  projection, and the occlusion it computed there was the measured cause of the
+  contrast change at a crossing.
+- `fadeOcclusionNearCrossing`: the main camera's ambient occlusion fades within
+  the blend distance of an opening, so the frames on both sides of a teleport
+  carry matching occlusion instead of a visible cut.
+- UHFPS: the look-angle handling on the camera bridge is a selectable mode —
+  add the crossing yaw to the stored angle, transfer the root yaw into it per
+  the documented UHFPS invariant, or leave the angle to the asset. The adapter
+  binds members as fields and as properties, logs every member it finds and
+  warns about the ones it does not, so a silent no-op cannot masquerade as a
+  broken crossing. **Tools → Portals → Prepare UHFPS Player** wires a selected
+  player root. Described in `Documentation/UHFPS.md`.
+
+### Changed
+
+- The setup guide moved into `Documentation/` and now ships with the
+  repository, linked from the README, together with the new UHFPS guide.
+
+- Content depth is copied from the frame the level-zero camera already
+  rendered. The AOV request it replaces made HDRP execute a second complete
+  render of that camera every frame.
+- Recursion levels whose quads are invisible from their parent level's camera
+  are no longer rendered; in the sandbox the deeper levels changed no pixel.
+- The motion vector prepass is skipped on virtual cameras: nothing consumes its
+  output while post-processing and screen space effects are off there.
+
 ### Fixed
 
 - Reconstruct portal content depth with the inverse GPU projection, matching
