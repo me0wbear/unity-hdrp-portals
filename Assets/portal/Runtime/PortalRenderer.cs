@@ -845,6 +845,14 @@ public sealed class PortalRenderer
             Override(data, FrameSettingsField.TransparentSSR, false);
             Override(data, FrameSettingsField.SSGI, false);
             Override(data, FrameSettingsField.ContactShadows, false);
+
+            // Векторы движения виртуальной камеры никто не потребляет: композит
+            // намеренно оставляет проёму векторы самого квада, посчитанные
+            // главной камерой, сглаживание и пост-обработка на виртуальных
+            // камерах выключены. Их препасс — чистый расход на каждый уровень.
+            // Возвращаются вместе с экранными эффектами: отражениям нужна
+            // репроекция по движению.
+            Override(data, FrameSettingsField.MotionVectors, false);
         }
 
         CopyLens(viewer, camera);
