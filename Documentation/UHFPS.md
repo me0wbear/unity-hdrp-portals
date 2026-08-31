@@ -1,100 +1,111 @@
-# Порталы и UHFPS
+# Portals and UHFPS
 
-Как подключить модуль к игроку UHFPS, что мост камеры делает на переходе и как
-разобрать два его характерных отказа: разворот взгляда после перехода и моргание
-в кадр перехода.
+How to wire the module to a UHFPS player, what the camera bridge does on a
+crossing, and how to break down its two characteristic failures: the view
+snapping to a wrong direction after a crossing, and a blink on the crossing
+frame.
 
-Модуль на UHFPS не ссылается и компилируется без него. Всё, что описано ниже,
-работает через рефлексию по именам типов `UHFPS.Runtime.LookController` и
-`UHFPS.Runtime.PlayerStateMachine`; проверено это на заглушках, повторяющих
-имена и сигнатуры настоящих классов. **На живом ассете мост не подтверждён** —
-поэтому он пишет в лог всё, что нашёл и чего не нашёл, и даёт выбрать режим
-согласования, не трогая код.
+The module does not reference UHFPS and compiles without it. Everything below
+works through reflection against the type names `UHFPS.Runtime.LookController`
+and `UHFPS.Runtime.PlayerStateMachine`, and is verified on stubs that copy the
+real class names and signatures. **The bridge has not been confirmed on the
+live asset** — which is why it logs everything it finds and fails to find, and
+lets you pick the reconciliation mode without touching code.
 
-## 1. Подготовка игрока
+## 1. Preparing the player
 
-Готового префаба игрока UHFPS в модуле нет и быть не может: префаб не может
-содержать компоненты ассета, на который проект не ссылается, а путешественник и
-мост обязаны стоять на том корне, который двигает контроллер UHFPS. Вместо
-префаба — пункт меню.
+There is no ready UHFPS player prefab in the module, and there cannot be one:
+a prefab cannot carry components of an asset the project does not reference,
+and the traveller and the bridge must sit on the root the UHFPS controller
+moves. A menu item stands in for the prefab.
 
-Выделите корень игрока UHFPS и выполните
-**Tools → Portals → Prepare UHFPS Player**. Он делает ручные шаги из разделов 5
-и 6 SETUP.md: вешает `PortalTraveller` и `PortalCameraBridge`, находит камеру
-среди потомков и связывает **View Point**, **Traveller** и **Gameplay Camera**.
-Затем выполните **Tools → Portals → Wire Scene**, чтобы ту же камеру получили
-порталы.
+Select the UHFPS player root and run
+**Tools → Portals → Prepare UHFPS Player**. It performs the manual steps from
+sections 5 and 6 of [`SETUP.md`](SETUP.md): adds `PortalTraveller` and
+`PortalCameraBridge`, finds the camera among the children and wires
+**View Point**, **Traveller** and **Gameplay Camera**. Then run
+**Tools → Portals → Wire Scene** so the portals get the same camera.
 
-Если камеры среди потомков корня нет, пункт меню скажет об этом в лог, а поля
-камеры останутся пустыми — назначьте их руками.
+If there is no camera among the root's children, the menu item says so in the
+log and leaves the camera fields empty — assign them by hand.
 
-## 2. Что мост делает на переходе
+## 2. What the bridge does on a crossing
 
-1. Переносит состояние Cinemachine и закрывает переход жёсткой склейкой.
-2. Сбрасывает историю кадров HDRP: телепорт она сама не обнаруживает.
-3. Поворачивает сохранённое состояние UHFPS: угол взгляда и мировую скорость.
+1. Carries the Cinemachine state across and closes the crossing with a hard
+   cut.
+2. Resets the HDRP frame history: the pipeline does not detect a teleport on
+   its own.
+3. Rotates the stored UHFPS state: the look angle and the world-space
+   velocity.
 
-Третий пункт настраивается полем **Uhfps Look Mode** на мосту, и вот почему.
+The third point is governed by the **Uhfps Look Mode** field on the bridge,
+and here is why.
 
-## 3. Согласование угла взгляда
+## 3. Reconciling the look angle
 
-Документация UHFPS устроена так: поворот корня игрока всегда нулевой, а
-направление живёт в look rotation камеры; ненулевой поворот корня ассет
-переносит туда сам. Портал же на переходе поворачивает именно корень. Как эти
-два механизма сложатся на конкретной версии ассета, заранее знать нельзя,
-поэтому режим открыт настройкой:
+UHFPS is built around an invariant: the player root rotation is always zero,
+the direction lives in the camera's look rotation, and a non-zero root
+rotation is transferred there by the asset itself. The portal, however,
+rotates exactly the root on a crossing. How these two mechanisms combine on a
+given version of the asset cannot be known in advance, so the mode is a
+setting:
 
-| Режим | Что делает | Когда верен |
+| Mode | What it does | When it is right |
 |---|---|---|
-| **Add Yaw Delta** | Добавляет поворот перехода к сохранённому рысканию, корень не трогает | Контроллер каждый кадр переписывает поворот из сохранённого угла и съедает поворот корня. Режим по умолчанию |
-| **Transfer Root Yaw** | Переносит итоговое рыскание корня в сохранённый угол и обнуляет рыскание корня | Ассет сам переносит ненулевой поворот корня, и с режимом добавки поворот удваивается |
-| **Do Not Touch** | Сохранённый угол не трогает | Для разбора: если вид верен уже так, согласование делает сам ассет |
+| **Add Yaw Delta** | Adds the crossing rotation to the stored yaw, leaves the root alone | The controller rewrites the root from its stored angle every frame and eats the root rotation. The default |
+| **Transfer Root Yaw** | Moves the root's resulting yaw into the stored angle and zeroes the root yaw | The asset transfers a non-zero root rotation itself, and with the additive mode the rotation doubles |
+| **Do Not Touch** | Leaves the stored angle alone | For diagnosis: if the view is already correct like this, the asset reconciles on its own |
 
-Подбор по симптому после выхода из повёрнутого портала:
+Picking by symptom after leaving a rotated portal:
 
-- вид разворачивается в прежнюю мировую сторону — оставьте **Add Yaw Delta** и
-  проверьте лог привязки, см. раздел 4;
-- поворот удваивается — переключите на **Transfer Root Yaw**;
-- всё верно — значит, хватает **Do Not Touch**, и любой другой режим лишний.
+- the view snaps back to its old world direction — keep **Add Yaw Delta** and
+  check the binding log, see section 4;
+- the rotation doubles — switch to **Transfer Root Yaw**;
+- everything is correct — then **Do Not Touch** is enough and any other mode
+  is redundant.
 
-## 4. Лог привязки
+## 4. The binding log
 
-При первом включении мост пишет по строке на каждый член UHFPS, с которым
-собирается работать:
+On first activation the bridge writes one line per UHFPS member it intends to
+work with:
 
 - `UHFPS binding: LookController.LookRotation (field) will be adjusted on
-  crossings` — член найден, мост будет его поворачивать;
-- `UHFPS component ... was found, but member ... was not` — версия ассета
-  хранит состояние иначе; мост его не тронет, и вид после перехода развернёт
-  сохранённым углом. Это главный подозреваемый при развороте взгляда;
-- `UHFPS type ... is present in the project, but no component of it was found` —
-  компоненты стоят не под тем корнем, на котором висит мост;
-- строк нет вовсе — типов UHFPS в проекте нет, мост спит.
+  crossings` — the member is found and will be rotated;
+- `UHFPS component ... was found, but member ... was not` — this version of
+  the asset stores its state differently; the bridge will not touch it, and
+  the view after a crossing will be turned by the stored angle. The prime
+  suspect when the view snaps;
+- `UHFPS type ... is present in the project, but no component of it was
+  found` — the components sit under a different root than the bridge;
+- no lines at all — the UHFPS types are not in the project and the bridge is
+  dormant.
 
-Члены ищутся и как поля, и как свойства: версии ассета отличаются.
+Members are looked up both as fields and as properties: asset versions differ.
 
-## 5. Моргание в кадр перехода
+## 5. The blink on the crossing frame
 
-Сброс истории кадров нужен, чтобы кадр после телепорта не пошёл с векторами
-движения от старой позы. Но у сброса есть цена: он перезапускает и адаптацию
-автоматической экспозиции. С автоэкспозицией в сцене это читается как моргание
-ровно в кадр перехода. С фиксированной экспозицией сброс безвреден — в песочнице
-модуля стоит именно она, и моргания там нет.
+The frame history reset exists so the first frame after a teleport does not go
+out with motion vectors from the old pose. But the reset has a price: it also
+restarts the adaptation of automatic exposure. With auto exposure in the
+scene, that reads as a blink exactly on the crossing frame. With fixed
+exposure the reset is harmless — the module's sandbox uses fixed exposure and
+shows no blink.
 
-Выбор из двух зол делается галкой **Reset Camera History** на мосту:
+The trade is chosen with the **Reset Camera History** toggle on the bridge:
 
-| Reset Camera History | Цена |
+| Reset Camera History | Price |
 |---|---|
-| Включена | Однокадровое моргание при автоэкспозиции |
-| Выключена | Однокадровый след движения по всему кадру |
+| On | A one-frame blink under automatic exposure |
+| Off | A one-frame motion smear across the whole frame |
 
-Если моргание мешает, а след приемлем — снимите галку. Если нужны и
-автоэкспозиция, и сброс — задайте экспозицию режимом Fixed или Curve хотя бы в
-объёме вокруг порталов. Разницу грейдинга между комнатами при этом переносит
-**Blend Volumes Through Portal**, ей автоэкспозиция не нужна.
+If the blink bothers you and the smear is acceptable, turn the toggle off. If
+you need both auto exposure and the reset, set the exposure to Fixed or Curve
+at least in a volume around the portals. The grading difference between rooms
+is carried by **Blend Volumes Through Portal** regardless — it does not need
+auto exposure.
 
-## 6. Что прислать, если не заработало
+## 6. What to send if it does not work
 
-Разворот, удвоение или моргание на живом UHFPS — это ровно те случаи, ради
-которых мост пишет лог. Для разбора достаточно трёх вещей: строки привязки из
-раздела 4, выбранный режим согласования и версия UHFPS.
+A snap, a doubled rotation or a blink on the live UHFPS is exactly what the
+bridge logs for. Three things are enough for a diagnosis: the binding lines
+from section 4, the selected reconciliation mode, and the UHFPS version.

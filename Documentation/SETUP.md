@@ -1,280 +1,293 @@
-# Порталы: установка и настройка
+# Portals: setup guide
 
-Бесшовный портал для Unity 6 на HDRP. Момент перехода не читается глазом: вид в
-проёме живёт под той же экспозицией, тонемапом и сглаживанием, что и остальной
-кадр, а кадр до перехода и кадр после — одна и та же картинка.
+Seamless portals for Unity 6 on HDRP. The crossing is invisible to the eye: the
+view in the opening lives under the same exposure, tonemapping and antialiasing
+as the rest of the frame, and the frame before you cross and the frame after
+are the same picture.
 
-## 1. Что нужно
+## 1. Requirements
 
 - Unity **6000.5.9f1**
 - HDRP **17.5.0**
-- Cinemachine **3.1.4** — необязателен, нужен только если камерой управляет он
-- Сторонний контроллер игрока — необязателен, модуль работает и без него
+- Cinemachine **3.1.4** — optional, only needed if it drives your camera
+- A third-party player controller — optional, the module works without one
 
-## 2. Установка
+## 2. Installation
 
-Скопируйте папку `Assets/portal` в свой проект целиком. Внутри неё лежит всё:
-код, шейдеры, материалы и префаб. Ничего в настройках проекта править не нужно.
+Copy the `Assets/portal` folder into your project as a whole. Everything is
+inside it: code, shaders, materials and prefabs. No project settings need
+changing.
 
-Проверьте, что материал `Assets/portal/PortalScreenMat.mat` собран на шейдере
-`Portals/PortalScreen`. Если материал потерялся, пересоберите его пунктом меню
+Check that the `Assets/portal/PortalScreenMat.mat` material is built on the
+`Portals/PortalScreen` shader. If the material got lost, rebuild it with
 **Tools → Portals → Rebuild Module Assets**.
 
-## 3. Готовые префабы
+## 3. Ready-made prefabs
 
-В модуле три префаба. Любой из них можно перетащить в сцену и работать дальше
-с ним, ничего не собирая руками.
+The module ships three prefabs. Any of them can be dragged into a scene and
+worked with as is, with nothing assembled by hand.
 
-| Префаб | Что внутри | Когда брать |
+| Prefab | What is inside | When to take it |
 | --- | --- | --- |
-| `Portal.prefab` | Один портал: корень, зона перехода, квад с материалом | Нужен один конец: несимметричная пара, портал в готовую композицию |
-| `PortalPair.prefab` | Два конца, уже связанных друг с другом в обе стороны | Обычный случай: нужен работающий проход |
-| `PortalPlayer.prefab` | Контроллер персонажа, путешественник, мост камеры и камера на уровне глаз | Проверить проход ногами, не подключая свой контроллер |
+| `Portal.prefab` | A single portal: root, trigger zone, quad with the material | You need one end: an asymmetric pair, a portal in an existing composition |
+| `PortalPair.prefab` | Two ends already linked to each other both ways | The usual case: you need a working passage |
+| `PortalPlayer.prefab` | Character controller, traveller, camera bridge and a camera at eye level | To walk through on foot without wiring your own controller |
 
-Концы пары в префабе разнесены на тридцать метров и развёрнуты лицом друг к
-другу. Разнесены не для красоты: пара, стоящая вплотную, попадает сама себе в
-кадр, и вместо двух видов получается коридор из отражений. После перетаскивания
-двигайте концы поодиночке, за их собственные корни.
+The ends of the pair sit thirty metres apart and face each other. The distance
+is not cosmetic: a pair standing close catches itself in frame, and instead of
+two views you get a corridor of reflections. After dragging the pair in, move
+the ends one by one, by their own roots.
 
-Что остаётся сделать руками: выдать порталам камеру. Ссылка на камеру живёт в
-сцене, а префаб про сцену ничего не знает, поэтому поле `Player Camera` остаётся
-пустым. Заполняет его пункт меню **Tools → Portals → Wire Scene** — он раздаёт
-камеру всем порталам сцены разом. Проверить, что ничего не забыто, можно пунктом
-**Tools → Portals → Validate Scene**.
+What remains to do by hand: give the portals a camera. The camera reference
+lives in the scene, and a prefab knows nothing about the scene, so the
+`Player Camera` field stays empty. **Tools → Portals → Wire Scene** fills it —
+it hands one camera to every portal in the scene. **Tools → Portals →
+Validate Scene** checks that nothing was missed.
 
-Управление в `PortalPlayer.prefab` демонстрационное: ходьба, бег и мышь. Оно
-нужно, чтобы пройти сквозь портал и посмотреть, а не чтобы делать на нём игру. В
-своём проекте замените `PortalDemoController` на свой контроллер — остальные
-компоненты на том же объекте менять не нужно.
+The controls in `PortalPlayer.prefab` are a demo: walk, run and mouse look.
+They exist so you can step through a portal and look around, not to build a
+game on. In your own project replace `PortalDemoController` with your
+controller — the other components on the same object stay as they are.
 
-Если префабы потерялись или разошлись с полями компонентов, соберите их заново
-пунктом **Tools → Portals → Rebuild Prefabs**.
+If the prefabs got lost or fell out of sync with the component fields, rebuild
+them with **Tools → Portals → Rebuild Prefabs**.
 
-## 4. Портал вручную
+## 4. A portal by hand
 
-Быстрый путь — **Tools → Portals → Create Portal Pair**: создаёт связанную пару
-и назначает ей камеру. Дальше расставьте порталы по месту.
+The fast path is **Tools → Portals → Create Portal Pair**: it creates a linked
+pair with the camera already assigned. Then place the portals where they
+belong.
 
-Ручной путь, шаг за шагом.
+The manual path, step by step.
 
-### 4.1 Корень
+### 4.1 The root
 
-Создайте пустой GameObject, назовите `Portal_A`.
+Create an empty GameObject and name it `Portal_A`.
 
-Поставьте его туда, где должен быть проём. Точка отсчёта — центр проёма. Если
-проём высотой 3 метра стоит на полу, ставьте корень на высоту 1.5.
+Place it where the opening should be. The reference point is the centre of the
+opening. If a three-metre opening stands on the floor, the root goes at height
+1.5.
 
-Разверните так, чтобы локальная ось **+Z** смотрела на игрока. Это лицевая
-сторона портала, и от неё считается всё остальное.
+Rotate it so the local **+Z** axis looks at the player. That is the portal's
+front side, and everything else is measured from it.
 
-### 4.2 Компонент и зона перехода
+### 4.2 The component and the trigger zone
 
-Добавьте компонент `Portal`.
+Add the `Portal` component.
 
-Добавьте Box Collider. Включите Is Trigger. Задайте Size: X и Y — по размеру
-проёма, Z — толщина зоны, достаточно 1.0-1.5.
+Add a Box Collider. Enable Is Trigger. Set Size: X and Y to the opening size,
+Z to the zone thickness — 1.0-1.5 is enough.
 
-Триггер описывает зону вокруг проёма. Сам переход считается не по нему, а по
-расстоянию до плоскости портала, поэтому он продолжает работать и когда
-контроллер игрока временно выключен.
+The trigger describes the zone around the opening. The crossing itself is
+detected by distance to the portal plane, not by the trigger, so it keeps
+working even while the player's controller is temporarily disabled.
 
-### 4.3 Квад
+### 4.3 The quad
 
-Создайте дочерний объект и назовите его `Screen`.
+Create a child object and name it `Screen`.
 
-- Локальные позиция и поворот — нулевые.
-- Локальный масштаб несёт размер проёма: X — ширина, Y — высота, Z — единица.
-- Mesh Filter: встроенный **Quad**.
-- Mesh Renderer: материал `PortalScreenMat`, тени выключить — и отбрасывание, и
-  приём.
+- Local position and rotation — zero.
+- The local scale carries the opening size: X — width, Y — height, Z — one.
+- Mesh Filter: the built-in **Quad**.
+- Mesh Renderer: the `PortalScreenMat` material, shadows off — both casting
+  and receiving.
 
-В компоненте `Portal` на корне назначьте этот Mesh Renderer в поле **Screen**.
+In the `Portal` component on the root, assign this Mesh Renderer to the
+**Screen** field.
 
-Квад обязан быть **прямым потомком** корня портала. Его трансформ переписывается
-каждый кадр, поэтому ничего между ним и корнем стоять не должно. Декоративную
-рамку вешайте соседом квада, а не родителем.
+The quad must be a **direct child** of the portal root. Its transform is
+rewritten every frame, so nothing may stand between it and the root. Hang a
+decorative frame as the quad's sibling, not its parent.
 
-### 4.4 Второй портал
+### 4.4 The second portal
 
-Повторите шаги 4.1–4.3 для `Portal_B`. Ориентация может быть любой: пара с
-поворотом работает так же, как пара лицом к лицу.
+Repeat steps 4.1-4.3 for `Portal_B`. The orientation can be anything: a
+rotated pair works the same as a pair face to face.
 
-Затем свяжите пару в обе стороны: у `Portal_A` в поле **Exit Portal** укажите
-`Portal_B`, у `Portal_B` — `Portal_A`.
+Then link the pair both ways: on `Portal_A` set **Exit Portal** to `Portal_B`,
+on `Portal_B` — to `Portal_A`.
 
-## 5. Игрок
+## 5. The player
 
-На корневой объект игрока (тот, где CharacterController) добавьте
+On the player's root object (the one with the CharacterController) add
 `PortalTraveller`.
 
-В поле **View Point** назначьте Transform камеры. Переход засчитывается по этой
-точке: игрок должен переноситься ровно тогда, когда плоскость пересекает глаз,
-иначе кадр после перехода не совпадёт с кадром до него.
+In the **View Point** field assign the camera's Transform. The crossing is
+counted at this point: the player must be carried over exactly when the plane
+crosses the eye, otherwise the frame after the crossing will not match the
+frame before it.
 
-На обоих порталах в поле **Player Camera** назначьте одну и ту же камеру — ту,
-которой игрок смотрит.
+On both portals assign the same camera — the one the player looks through — to
+the **Player Camera** field.
 
-## 6. Непрерывность вида
+## 6. View continuity
 
-Если камерой управляет Cinemachine или у контроллера есть свой сохранённый угол
-взгляда, добавьте на объект игрока `PortalCameraBridge` и назначьте ему
-**Traveller** и **Gameplay Camera**.
+If Cinemachine drives the camera, or the controller keeps its own stored look
+angle, add `PortalCameraBridge` to the player object and assign its
+**Traveller** and **Gameplay Camera**.
 
-Мост делает три вещи на переходе:
+The bridge does three things on a crossing:
 
-1. Переносит состояние Cinemachine и закрывает переход жёсткой склейкой. Без
-   этого камера проедет весь путь от старой позы к новой на глазах у игрока.
-2. Сбрасывает историю кадров HDRP. Телепорт она сама не обнаруживает, и один
-   кадр пойдёт с векторами движения, посчитанными от позы до перехода.
-3. Поворачивает сохранённый угол взгляда и мировую скорость контроллера.
+1. Carries the Cinemachine state across and closes the crossing with a hard
+   cut. Without it the camera travels the whole way from the old pose to the
+   new one in front of the player.
+2. Resets the HDRP frame history. The pipeline does not detect a teleport on
+   its own, and one frame would go out with motion vectors computed from the
+   pose before the crossing.
+3. Rotates the controller's stored look angle and world-space velocity.
 
-Третий пункт работает через рефлексию с UHFPS: ищутся типы
-`UHFPS.Runtime.LookController` и `UHFPS.Runtime.PlayerStateMachine`. Модуль на
-UHFPS не ссылается и без него компилируется. Если контроллер у вас свой, поворот
-сохранённого угла придётся дописать: подпишитесь на событие
-`PortalTraveller.Teleported` и поверните своё состояние на `context.Rotation`.
+The third point works through reflection against UHFPS: it looks up the types
+`UHFPS.Runtime.LookController` and `UHFPS.Runtime.PlayerStateMachine`. The
+module does not reference UHFPS and compiles without it. If your controller is
+your own, the stored-angle rotation is yours to write: subscribe to
+`PortalTraveller.Teleported` and rotate your state by `context.Rotation`.
 
-Интеграция с UHFPS описана отдельно в `UHFPS.md`: подготовка игрока одним
-пунктом меню, режимы согласования угла взгляда, чтение лога привязки и разбор
-моргания в кадр перехода.
+The UHFPS integration is described separately in [`UHFPS.md`](UHFPS.md):
+preparing the player with one menu item, the look-angle modes, reading the
+binding log, and the blink on the crossing frame.
 
-**Ограничение:** мост к UHFPS проверен на заглушках, повторяющих имена и
-сигнатуры настоящих классов. На живом ассете он не подтверждён.
+**Limitation:** the UHFPS bridge is verified against stubs that copy the real
+class names and signatures. It has not been confirmed on the live asset.
 
-## 7. Двойники и резка
+## 7. Clones and slicing
 
-Пока путешественник пересекает плоскость, его половина уже прошла, а половина
-ещё нет. Без двойника он въезжает в стену с одной стороны и возникает из ниоткуда
-с другой. `PortalTraveller` создаёт двойника сам, ставит его в позу по ту сторону
-и режет обе половины: оригинал плоскостью входа, двойника плоскостью выхода.
+While a traveller crosses the plane, half of it has passed and half has not.
+Without a clone it drives into the wall on one side and appears out of nowhere
+on the other. `PortalTraveller` creates the clone itself, poses it on the far
+side and slices both halves: the original by the entrance plane, the clone by
+the exit plane.
 
-Двойник — только изображение: скрипты, коллайдеры, тела, камеры, источники света
-и звука с копии снимаются.
+The clone is an image only: scripts, colliders, bodies, cameras, light and
+audio sources are stripped from the copy.
 
-### Как научить свой материал резаться
+### Teaching your material to slice
 
-Модуль кладёт на все рендереры путешественника три свойства:
+The module sets three properties on every renderer of a traveller:
 
-| Свойство | Тип | Значение |
+| Property | Type | Meaning |
 |---|---|---|
-| `_SliceCentre` | Vector | Точка на плоскости резки, мировые координаты |
-| `_SliceNormal` | Vector | Нормаль плоскости, указывает на **остающуюся** половину |
-| `_SliceEnabled` | Float | 1 — резать, 0 — не резать |
+| `_SliceCentre` | Vector | A point on the slicing plane, world space |
+| `_SliceNormal` | Vector | The plane normal, pointing at the half that **stays** |
+| `_SliceEnabled` | Float | 1 — slice, 0 — do not |
 
-Материалы, которые про эти свойства не знают, их просто игнорируют, поэтому
-ставить их безопасно на что угодно. Чтобы материал начал резаться, добавьте в
-него отбрасывание фрагмента.
+Materials that know nothing about these properties simply ignore them, so
+setting them is safe on anything. To make a material slice, add fragment
+discard to it.
 
-В Shader Graph: `Position` в World space → `Subtract` с `_SliceCentre` →
-`Dot Product` с `_SliceNormal` → `Lerp(1, результат, _SliceEnabled)` → в
-`Alpha`, при включённом Alpha Clipping с порогом 0.
+In Shader Graph: `Position` in World space → `Subtract` with `_SliceCentre` →
+`Dot Product` with `_SliceNormal` → `Lerp(1, result, _SliceEnabled)` → into
+`Alpha`, with Alpha Clipping enabled at threshold 0.
 
-В рукописном шейдере, в фрагментной функции:
+In a hand-written shader, in the fragment function:
 
 ```hlsl
 float side = dot(positionWS - _SliceCentre.xyz, _SliceNormal.xyz);
 clip(lerp(1.0, side, _SliceEnabled));
 ```
 
-Готовый материал с резкой модуль не поставляет: он зависит от того, как выглядит
-ваш персонаж, и подменять его чужим было бы хуже, чем не резать вовсе. Если
-резка не нужна или материал её не умеет, выберите поведение в поле
-**Clone Fallback** компонента `Portal`: рисовать двойника целиком либо не
-рисовать.
+The module does not ship a ready sliced material: it depends on what your
+character looks like, and replacing yours with a foreign one would be worse
+than not slicing at all. If slicing is not needed, or the material cannot do
+it, choose the behaviour in the **Clone Fallback** field of the `Portal`
+component: draw the clone whole, or not at all.
 
-**Ограничение:** скелетная анимация на двойника не переносится. Копия
-повторяет позу корня, поэтому годится для жёсткой геометрии — предметов, ящиков,
-простого тела игрока.
+**Limitation:** skinned animation is not carried to the clone. The copy
+repeats the root's pose, which is fine for rigid geometry — props, crates, a
+simple player body.
 
-## 8. Проверка сцены
+## 8. Validating the scene
 
-**Tools → Portals → Validate Scene** проходит по всем порталам и докладывает,
-чего не хватает: не связанная пара, связанная в одну сторону, не назначенная
-камера, отсутствующий квад, квад не на своём месте в иерархии, отсутствующий
-триггер, травеллер без точки взгляда.
+**Tools → Portals → Validate Scene** walks every portal and reports what it
+lacks: an unlinked pair, a pair linked one way, a missing camera, a missing
+quad, a quad in the wrong place in the hierarchy, a missing trigger, a
+traveller without a view point.
 
-**Tools → Portals → Wire Scene** связывает попарно все порталы, у которых пара
-не задана, и раздаёт всем одну камеру.
+**Tools → Portals → Wire Scene** links all unpaired portals pairwise and hands
+one camera to all of them.
 
-## 9. Поля компонента Portal
+## 9. Portal component fields
 
-| Поле | Что делает |
+| Field | What it does |
 |---|---|
-| **Screen** | Квад, на котором показывается вид. Прямой потомок корня. |
-| **Exit Portal** | Парный портал. Связывать в обе стороны. |
-| **Player Camera** | Камера, для которой считается вид. |
-| **Resolution Divider** | Делитель размера таргета. Единица — размер экрана и соответствие пиксель в пиксель. Больше — дешевле и мылит. |
-| **Recursion Depth** | Сколько раз портал виден сам в себе. Ноль — без рекурсии. Каждый уровень стоит камеры и буферов размером с экран. |
-| **Clipping Offset** | Сдвиг плоскости отсечения от плоскости выхода. Убирает мерцание точно на грани проёма. |
-| **Clipping Safety Factor** | Запас удержания квада у самого лица. Меньше — квад ближе к плоскости проёма, больше — надёжнее вплотную. |
-| **Cull When Offscreen** | Не считать вид, когда проём вне поля зрения. Выключать только при отладке. |
-| **Write Content Depth** | Писать глубину видимого сквозь портал в буфер главной камеры. Без этого глубина резкости размывает проём в кисель, потому что считает его плоскостью перед лицом. |
-| **Blend Volumes Through Portal** | Заранее переводить состояние Volume на сторону назначения. Нужно, когда комнаты разведены по цвету. |
-| **Volume Blend Distance** | С какого расстояния начинать этот перевод. |
-| **Fallback Color** | Чем заполняется проём за пределом глубины рекурсии. |
-| **Clone Fallback** | Что делать с двойником, если его материал не умеет отсекаться плоскостью. |
+| **Screen** | The quad the view is shown on. A direct child of the root. |
+| **Exit Portal** | The paired portal. Link both ways. |
+| **Player Camera** | The camera the view is computed for. |
+| **Resolution Divider** | Divider of the target size. One means screen size and a pixel-for-pixel match. Higher is cheaper and blurrier. |
+| **Recursion Depth** | How many times the portal is seen inside itself. Zero — no recursion. Every level costs a camera and screen-sized buffers. |
+| **Restrict View To Opening** | Render each level only inside the screen rectangle its opening occupies. Same image, same pixel density; the cost follows the opening's area instead of the whole frame. |
+| **Screen Space Effects In View** | Bring HDRP's depth-reading screen space effects back on the virtual cameras. Off by default: their projection is oblique, HDRP linearises its depth incorrectly, and the occlusion computed there differs from the view after the crossing. |
+| **Clipping Offset** | Offset of the clip plane from the exit plane. Removes flicker exactly at the opening's edge. |
+| **Clipping Safety Factor** | Reserve for holding the quad right at the face. Lower — the quad stays closer to the opening plane, higher — more reliable at point-blank range. |
+| **Cull When Offscreen** | Do not compute the view while the opening is out of sight. Disable only for debugging. |
+| **Write Content Depth** | Write the depth of what is visible through the portal into the main camera's buffer. Without it depth of field blurs the opening into mush, treating it as a plane in front of the face. |
+| **Blend Volumes Through Portal** | Carry the destination side's volume state across in advance. Needed when the rooms differ in grading. |
+| **Volume Blend Distance** | The distance at which that carry-over begins. |
+| **Fade Occlusion Near Crossing** | Fade the main camera's ambient occlusion near an opening, so the frames on both sides of the teleport carry matching occlusion instead of a visible cut. |
+| **Fallback Color** | What fills the opening beyond the recursion depth. |
+| **Clone Fallback** | What to do with the clone when its material cannot slice. |
 
-## 10. Производительность
+## 10. Performance
 
-Каждый уровень рекурсии — отдельная камера и буферы размером с экран. Порталы
-считаются только когда видны, ушедшие из поля зрения приостанавливаются.
+Each recursion level is a separate camera with screen-sized buffers. Portals
+are computed only while visible; the ones out of sight are suspended. With
+**Restrict View To Opening** on, a level renders only the screen rectangle of
+its opening, so the cost follows the opening's size on screen.
 
-`PortalSystem.Budget` ограничивает общее число одновременно живых уровней на всю
-сцену. При исчерпании срезается глубина рекурсии, а не сами порталы: лучше
-показать все проёмы мельче, чем часть проёмов чёрными.
+`PortalSystem.Budget` caps the total number of live levels across the scene.
+When exhausted, recursion depth is cut rather than whole portals: better to
+show every opening shallower than some of them black.
 
-Ориентир на демо-сцене в 1280×720: 4,2 мс без порталов, 9,9 мс с четырьмя
-порталами и глубиной рекурсии 2.
+## 11. Limitations
 
-## 11. Ограничения
+- **The opening must be a real hole in the geometry.** A portal laid over a
+  solid wall will show the inside of that wall from close up.
+- **Slicing works only on materials that support it.** The property contract
+  is in section 7; no ready material ships with the module.
+- **Skinned animation is not carried to the clone.**
+- **Collisions are not split by side during the crossing.** A traveller can
+  catch on geometry around the exit.
+- **Stereo rendering is not supported.**
+- **Sound does not pass through a portal.**
+- **Motion vectors in the opening belong to the quad, not to what is seen
+  through it.** Fast camera movement leaves a faint trail on the content: the
+  quad and the content move differently across the screen, and temporal
+  antialiasing and motion blur follow the former. Substituting the real
+  vectors was tried: what the virtual camera returns is non-zero on a
+  completely static scene, and the opening blurred as a whole. A sharp image
+  with a faint trail beats mush, so the substitution was removed.
+- **Depth of field over-blurs the opening in the last centimetres before the
+  crossing.** At a distance everything is right: the depth is substituted with
+  the distance to the content and the blur follows it. Point-blank the
+  substitution stops reaching the blur computation. If it bothers you, limit
+  the near blur: `Near Blur` in Depth of Field starting beyond the portal.
 
-- **Проём должен быть настоящим отверстием в геометрии.** Портал, наложенный на
-  сплошную стену, вблизи покажет её изнутри.
-- **Резка работает только на материалах, которые её поддерживают.** Контракт
-  свойств описан в разделе 6; готовый материал модуль не поставляет.
-- **Скелетная анимация на двойника не переносится.**
-- **Столкновения в момент пересечения не разделяются по сторонам портала.**
-  Путешественник может зацепиться за геометрию вокруг выхода.
-- **Стереоскопический рендер не поддерживается.**
-- **Звук сквозь портал не проходит.**
-- **Векторы движения в проёме — от самого квада, а не от того, что видно
-  сквозь него.** На быстром движении камеры за содержимым проёма тянется лёгкий
-  след: квад и видимое сквозь него смещаются по экрану по-разному, а временное
-  сглаживание и размытие в движении считают по первому. Подмена настоящих
-  векторов пробовалась: то, что отдаёт виртуальная камера, оказалось непригодным
-  — на неподвижной сцене значения ненулевые, и проём мылился целиком. Резкая
-  картинка со слабым следом лучше, чем мыло, поэтому подмена снята.
-- **Глубина резкости размывает проём сильнее, чем должна, на последних
-  сантиметрах перед переходом.** На дистанции всё верно: глубина подменяется на
-  расстояние до содержимого, и размытие ложится по нему. Вплотную к проёму
-  подмена перестаёт доезжать до расчёта размытия. Если это мешает, ограничьте
-  ближнее размытие: `Near Blur` в Depth of Field с началом дальше проёма.
+## 12. If the opening is empty
 
-## 12. Если в проёме пусто
+The module warns in the log about everything that is fixed by configuration: a
+disabled quad renderer, a lost material, an unsupported shader, a material
+without the `_MainTex` property.
 
-Модуль сам предупреждает в лог о том, что чинится настройкой: выключенный
-рендерер квада, потерянный материал, неподдерживаемый шейдер, материал без
-свойства `_MainTex`.
+If there are no warnings and the opening is black, check in order:
 
-Если предупреждений нет, а проём чёрный, проверьте по порядку:
+1. **Exit Portal** is assigned and linked both ways.
+2. **Player Camera** is assigned and is the camera that draws the frame.
+3. The portal's local **+Z** axis looks at the player, not away.
+4. The quad is a direct child of the root, its local position and rotation are
+   zero.
 
-1. **Exit Portal** назначен и связан в обе стороны.
-2. **Player Camera** назначена и это та камера, которая рисует кадр.
-3. Локальная ось **+Z** портала смотрит на игрока, а не от него.
-4. Квад — прямой потомок корня, его локальные позиция и поворот нулевые.
+## 13. The sandbox
 
-## 13. Песочница
+`Assets/portal/Examples/PortalSandbox.unity` is a scene for looking at the
+portal with your own hands. Open it, press Play, walk.
 
-`Assets/portal/Examples/PortalSandbox.unity` — сцена, чтобы посмотреть на портал
-руками. Открыть, нажать Play, ходить.
+Inside are two rooms: a cold grey-blue one where the game starts, and a warm
+one with three coloured pillars. The difference in colour and light is
+deliberate — it makes it obvious that the opening shows a different place, not
+a reflection. A pair of portals facing each other stands separately: recursion
+is visible in it. Crates with physics lie by the wall; they can be pushed
+through the opening.
 
-Внутри две комнаты: холодная серо-синяя, откуда начинается игра, и тёплая с
-тремя разноцветными столбами. Разница по цвету и свету сделана нарочно — по ней
-сразу видно, что в проёме действительно другое место, а не отражение. Отдельно
-стоит пара порталов лицом друг к другу: в ней видна рекурсия. У стены лежат
-ящики с физикой, их можно протолкнуть сквозь проём.
+Controls: WASD, Shift — run, mouse — look.
 
-Управление: WASD, Shift — бег, мышь — взгляд.
-
-Сцена собирается заново пунктом меню **Tools → Portals → Build Sandbox Scene**,
-если её потребуется вернуть в исходный вид после экспериментов.
+The scene is rebuilt with **Tools → Portals → Build Sandbox Scene** if it
+needs to be returned to its original state after experiments.

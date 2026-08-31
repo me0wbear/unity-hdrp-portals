@@ -79,8 +79,6 @@ portal is missing, if anything.
   UHFPS player: one menu item, the look-angle modes, the binding log, and the
   blink on the crossing frame.
 
-Both guides are in Russian, like the source comments.
-
 ## What the components do
 
 | Component | Goes on | Job |
