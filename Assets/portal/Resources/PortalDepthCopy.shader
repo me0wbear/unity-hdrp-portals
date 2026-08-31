@@ -32,6 +32,12 @@ Shader "Hidden/Portals/DepthCopy"
 
             TEXTURE2D_X(_PortalSourceDepth);
 
+            // Начало вьюпорта копии в текстуре назначения, в пикселях. Камера,
+            // ограниченная областью проёма, рисует в этот вьюпорт, а внутренний
+            // буфер глубины пайплайна начинается с нулевого пикселя: выборка
+            // источника сдвигается на начало вьюпорта.
+            float4 _PortalCopyOrigin;
+
             struct Attributes
             {
                 uint vertexID : SV_VertexID;
@@ -58,7 +64,9 @@ Shader "Hidden/Portals/DepthCopy"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-                return LOAD_TEXTURE2D_X(_PortalSourceDepth, uint2(input.positionCS.xy)).r;
+                return LOAD_TEXTURE2D_X(
+                    _PortalSourceDepth,
+                    uint2(input.positionCS.xy - _PortalCopyOrigin.xy)).r;
             }
 
             ENDHLSL

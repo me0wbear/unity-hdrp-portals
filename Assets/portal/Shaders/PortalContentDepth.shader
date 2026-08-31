@@ -57,6 +57,11 @@ Shader "Hidden/Portals/ContentDepth"
             TEXTURE2D_X(_ContentDepth);
             float4x4 _PortalInverseProjection;
 
+            // Прямоугольник кадра, который рисовал нулевой уровень: xy — угол,
+            // zw — размер. Обратная матрица проекции описывает только эту
+            // область; полный кадр — (0, 0, 1, 1).
+            float4 _PortalViewRect;
+
             struct Attributes
             {
                 float3 positionOS : POSITION;
@@ -99,8 +104,14 @@ Shader "Hidden/Portals/ContentDepth"
                 // не только от расстояния, и линеаризовать её по ближней и
                 // дальней плоскости нельзя. Разворачиваем через обратную матрицу
                 // проекции — это работает для любой матрицы.
+                //
+                // Матрица описывает суженную до области проёма пирамиду, поэтому
+                // экранные координаты переводятся в доли этой области. Для
+                // полного кадра перевод вырождается в тождество.
+                float2 contentNDC =
+                    (positionNDC - _PortalViewRect.xy) / _PortalViewRect.zw;
                 float3 positionVS = ComputeViewSpacePosition(
-                    positionNDC, contentDepth, _PortalInverseProjection);
+                    contentNDC, contentDepth, _PortalInverseProjection);
 
                 // Расстояние переносится один в один: виртуальная камера стоит
                 // ровно там, куда игрок попал бы, пройдя сквозь портал.

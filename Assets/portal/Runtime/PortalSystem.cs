@@ -54,6 +54,7 @@ public sealed class PortalSystem : MonoBehaviour
         _volumeAnchorOwner = null;
         _occlusionFadeVolume = null;
         _occlusionFadeProfile = null;
+        PortalRenderer.ResetStatics();
     }
 
     public static void Register(Portal portal)
@@ -113,10 +114,24 @@ public sealed class PortalSystem : MonoBehaviour
         depthCopyVolume.injectionPoint = CustomPassInjectionPoint.BeforePostProcess;
         depthCopyVolume.AddPassOfType<PortalContentDepthCopyPass>();
 
+        // Квад выбирает вид по экранным координатам, а камера уровня рисует
+        // только область проёма: перед рендером каждой камеры шейдерам
+        // сообщается, какую часть кадра она рисует. Для всех остальных камер —
+        // сцены, отражений, превью — параметр равен полному кадру.
+        RenderPipelineManager.beginCameraRendering += PushCameraRect;
+        Shader.SetGlobalVector(CameraRectId, new Vector4(0f, 0f, 1f, 1f));
+
         // Порядок вызова OnDestroy при выходе не определён, а камеры порталов
         // держат таргеты и подписку на события пайплайна. Освобождаем их по
         // явному сигналу выхода, пока пайплайн ещё жив.
         Application.quitting += ReleaseAll;
+    }
+
+    private static readonly int CameraRectId = Shader.PropertyToID("_PortalCameraRect");
+
+    private static void PushCameraRect(ScriptableRenderContext context, Camera camera)
+    {
+        Shader.SetGlobalVector(CameraRectId, PortalRenderer.ViewRectFor(camera));
     }
 
     /// <summary>
@@ -388,6 +403,7 @@ public sealed class PortalSystem : MonoBehaviour
     private void OnDestroy()
     {
         Application.quitting -= ReleaseAll;
+        RenderPipelineManager.beginCameraRendering -= PushCameraRect;
         ReleaseAll();
 
         // Профиль создан в рантайме и никем больше не удерживается; сам Volume

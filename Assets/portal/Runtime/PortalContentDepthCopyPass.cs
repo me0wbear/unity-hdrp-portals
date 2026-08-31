@@ -28,11 +28,14 @@ public sealed class PortalContentDepthCopyPass : CustomPass
     private const string ShaderResource = "PortalDepthCopy";
 
     private static readonly int SourceDepthId = Shader.PropertyToID("_PortalSourceDepth");
+    private static readonly int CopyOriginId = Shader.PropertyToID("_PortalCopyOrigin");
 
-    // Камеры, глубину которых нужно снимать, и куда её класть. Заполняется
-    // рендерами порталов при создании камер нулевого уровня.
-    private static readonly Dictionary<Camera, RTHandle> Sources =
-        new Dictionary<Camera, RTHandle>();
+    // Камеры, глубину которых нужно снимать, и рендеры, которым она
+    // принадлежит. Заполняется рендерами порталов при создании камер нулевого
+    // уровня; текстура назначения и область копии запрашиваются у рендера в
+    // момент выполнения — область меняется каждый кадр вместе со следом проёма.
+    private static readonly Dictionary<Camera, PortalRenderer> Sources =
+        new Dictionary<Camera, PortalRenderer>();
 
     private Material _material;
     private MaterialPropertyBlock _block;
@@ -47,12 +50,12 @@ public sealed class PortalContentDepthCopyPass : CustomPass
         Sources.Clear();
     }
 
-    /// <summary>Подписывает камеру уровня на копирование её глубины в текстуру.</summary>
-    public static void Register(Camera camera, RTHandle destination)
+    /// <summary>Подписывает камеру уровня на копирование её глубины.</summary>
+    internal static void Register(Camera camera, PortalRenderer renderer)
     {
-        if (camera != null && destination != null)
+        if (camera != null && renderer != null)
         {
-            Sources[camera] = destination;
+            Sources[camera] = renderer;
         }
     }
 
@@ -89,17 +92,28 @@ public sealed class PortalContentDepthCopyPass : CustomPass
 
         // Проход глобальный и вызывается для каждой камеры кадра; работа есть
         // только у виртуальных камер нулевого уровня порталов.
-        if (!Sources.TryGetValue(context.hdCamera.camera, out RTHandle destination)
-            || destination == null)
+        if (!Sources.TryGetValue(context.hdCamera.camera, out PortalRenderer renderer)
+            || renderer == null)
         {
             return;
         }
 
-        // Размеры совпадают по построению: и текстура назначения, и таргет
-        // камеры создаются одним и тем же размером, поэтому копия идёт пиксель
-        // в пиксель, без масштабирования координат RTHandle.
+        RTHandle destination = renderer.ContentDepthTarget;
+        Rect viewport = renderer.ContentCopyViewport;
+        if (destination == null || viewport.width < 1f || viewport.height < 1f)
+        {
+            return;
+        }
+
+        // Камера, ограниченная областью проёма, рисует в свой вьюпорт внутри
+        // таргета, а внутренний буфер глубины пайплайна начинается с нулевого
+        // пикселя. Копия кладётся в тот же вьюпорт, что и цвет, со сдвигом
+        // выборки источника на его начало — так глубина совпадает с цветом
+        // пиксель в пиксель. Масштабирования нет: плотность пикселей одна.
         CoreUtils.SetRenderTarget(context.cmd, destination, ClearFlag.None);
+        context.cmd.SetViewport(viewport);
         _block.SetTexture(SourceDepthId, context.cameraDepthBuffer);
+        _block.SetVector(CopyOriginId, new Vector4(viewport.x, viewport.y, 0f, 0f));
         context.cmd.DrawProcedural(
             Matrix4x4.identity, _material, 0, MeshTopology.Triangles, 3, 1, _block);
     }
